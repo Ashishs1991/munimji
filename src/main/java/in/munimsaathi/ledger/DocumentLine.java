@@ -68,4 +68,20 @@ public class DocumentLine {
         this.amountPaise = amountPaise;
         this.restock = restock;
     }
+
+    public UUID getDocumentId() {
+        return documentId;
+    }
+
+    public UUID getLocationId() {
+        return locationId;
+    }
+
+    public BigDecimal getDisplayQuantity() {
+        return displayQuantity;
+    }
+
+    public BigDecimal getBaseQuantity() {
+        return baseQuantity;
+    }
 }

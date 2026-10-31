@@ -26,4 +26,16 @@ public interface DocumentLineRepository extends JpaRepository<DocumentLine, UUID
               and line.productId = :productId
             """)
     List<BigDecimal> returnedBaseQuantities(@Param("saleId") UUID saleId, @Param("productId") UUID productId);
+
+    List<DocumentLine> findByDocumentId(UUID documentId);
+
+    @Query("""
+            select line.baseQuantity
+            from DocumentLine line, PostedDocument document
+            where line.documentId = document.id
+              and document.sourceDocumentId = :receiptId
+              and document.kind = in.munimsaathi.ledger.DocumentKind.SUPPLIER_BILL
+              and line.productId = :productId
+            """)
+    List<BigDecimal> billedBaseQuantities(@Param("receiptId") UUID receiptId, @Param("productId") UUID productId);
 }

@@ -1,6 +1,7 @@
 package in.munimsaathi.ledger;
 
 import in.munimsaathi.catalog.CatalogService;
+import in.munimsaathi.catalog.Names;
 import in.munimsaathi.catalog.Party;
 import in.munimsaathi.catalog.PartyRepository;
 import in.munimsaathi.catalog.PartyRole;
@@ -35,6 +36,7 @@ public class PostingService {
     private final DocumentLineRepository lines;
     private final PartyLedgerRepository ledger;
     private final AllocationRepository allocations;
+    private final BillReviewRepository reviews;
     private final StockPosting stock;
 
     public PostingService(
@@ -47,6 +49,7 @@ public class PostingService {
             DocumentLineRepository lines,
             PartyLedgerRepository ledger,
             AllocationRepository allocations,
+            BillReviewRepository reviews,
             StockPosting stock
     ) {
         this.tenants = tenants;
@@ -58,6 +61,7 @@ public class PostingService {
         this.lines = lines;
         this.ledger = ledger;
         this.allocations = allocations;
+        this.reviews = reviews;
         this.stock = stock;
     }
 
@@ -91,11 +95,84 @@ public class PostingService {
                 occurredOn,
                 null,
                 operationId,
-                null
+                null,
+                FinanceStatus.PENDING
         ));
         lines.save(line(document.getId(), productId, locationId, conversion, null, false));
         stock.add(change(businessId, productId, locationId, conversion, conversion.baseQuantity(), StockReason.RECEIPT, operationId, occurredAt));
         return document.getId();
+    }
+
+    @Transactional
+    public PurchaseBillOutcome recordSupplierBill(
+            UUID userId,
+            UUID operationId,
+            UUID receiptId,
+            String billNumber,
+            LocalDate periodStart,
+            LocalDate periodEnd,
+            UUID productId,
+            BigDecimal displayQuantity,
+            String unitLabel,
+            long amountPaise,
+            LocalDate occurredOn,
+            Instant occurredAt
+    ) {
+        UUID businessId = tenants.currentBusinessId(userId);
+        Optional<UUID> prior = alreadyPosted(businessId, operationId);
+        if (prior.isPresent()) {
+            return new PurchaseBillOutcome(prior.get(), null);
+        }
+        requirePositive(amountPaise);
+        requireWhen(occurredOn, occurredAt);
+        if (periodStart == null || periodEnd == null || periodEnd.isBefore(periodStart)) {
+            throw new IllegalArgumentException("A bill needs a period that ends on or after it starts.");
+        }
+        PostedDocument receipt = requireReceipt(businessId, receiptId);
+        QuantityConversion conversion = catalog.convert(userId, productId, displayQuantity, unitLabel);
+        String number = Names.normalize(billNumber);
+        String fingerprint = BillFingerprint.of(
+                receipt.getPartyId(),
+                periodStart,
+                periodEnd,
+                productId,
+                conversion.baseQuantity(),
+                amountPaise
+        );
+        if (documents.existsByBusinessIdAndPartyIdAndBillNumberAndPeriodStartAndPeriodEnd(
+                businessId, receipt.getPartyId(), number, periodStart, periodEnd)
+                || documents.existsByBusinessIdAndFingerprint(businessId, fingerprint)) {
+            BillReview review = reviews.save(new BillReview(
+                    UUID.randomUUID(),
+                    businessId,
+                    receipt.getPartyId(),
+                    number,
+                    periodStart,
+                    periodEnd,
+                    fingerprint
+            ));
+            return new PurchaseBillOutcome(null, review.getId());
+        }
+        requireWithinReceived(receipt.getId(), productId, conversion.baseQuantity());
+        operations.saveAndFlush(new PostedOperation(operationId, businessId, "SUPPLIER_BILL", userId));
+        PostedDocument bill = new PostedDocument(
+                UUID.randomUUID(),
+                businessId,
+                receipt.getPartyId(),
+                DocumentKind.SUPPLIER_BILL,
+                occurredOn,
+                amountPaise,
+                operationId,
+                receipt.getId(),
+                FinanceStatus.RECORDED
+        );
+        bill.describeBill(number, periodStart, periodEnd, fingerprint);
+        documents.saveAndFlush(bill);
+        lines.saveAndFlush(line(bill.getId(), productId, receiptLocation(receipt.getId()), conversion, amountPaise, false));
+        BigDecimal billed = sum(lines.billedBaseQuantities(receipt.getId(), productId));
+        BigDecimal received = sum(lines.baseQuantities(receipt.getId(), productId));
+        receipt.markFinance(billed.compareTo(received) == 0 ? FinanceStatus.BILLED : FinanceStatus.PARTIAL);
+        return new PurchaseBillOutcome(bill.getId(), null);
     }
 
     @Transactional
@@ -130,7 +207,8 @@ public class PostingService {
                 occurredOn,
                 amountPaise,
                 operationId,
-                null
+                null,
+                FinanceStatus.RECORDED
         ));
         lines.save(line(document.getId(), productId, locationId, conversion, amountPaise, false));
         stock.add(change(
@@ -186,7 +264,8 @@ public class PostingService {
                 occurredOn,
                 amountPaise,
                 operationId,
-                sale.getId()
+                sale.getId(),
+                FinanceStatus.RECORDED
         ));
         PartyLedgerEntry entry = ledger.saveAndFlush(new PartyLedgerEntry(
                 UUID.randomUUID(),
@@ -247,7 +326,8 @@ public class PostingService {
                 occurredOn,
                 creditPaise,
                 operationId,
-                sale.getId()
+                sale.getId(),
+                FinanceStatus.RECORDED
         ));
         lines.save(line(document.getId(), productId, locationId, conversion, creditPaise, restock));
         if (restock) {
@@ -323,6 +403,31 @@ public class PostingService {
         Godown godown = godowns.findById(locationId).orElseThrow(() -> new IllegalArgumentException("Unknown godown."));
         if (!godown.getBusinessId().equals(businessId)) {
             throw new IllegalArgumentException("Unknown godown.");
+        }
+    }
+
+    private PostedDocument requireReceipt(UUID businessId, UUID receiptId) {
+        PostedDocument receipt = documents.findById(receiptId)
+                .orElseThrow(() -> new IllegalArgumentException("Unknown receipt."));
+        if (!receipt.getBusinessId().equals(businessId) || receipt.getKind() != DocumentKind.PURCHASE) {
+            throw new IllegalArgumentException("Unknown receipt.");
+        }
+        return receipt;
+    }
+
+    private UUID receiptLocation(UUID receiptId) {
+        List<DocumentLine> receiptLines = lines.findByDocumentId(receiptId);
+        if (receiptLines.isEmpty()) {
+            throw new IllegalArgumentException("Unknown receipt.");
+        }
+        return receiptLines.get(0).getLocationId();
+    }
+
+    private void requireWithinReceived(UUID receiptId, UUID productId, BigDecimal baseQuantity) {
+        BigDecimal received = sum(lines.baseQuantities(receiptId, productId));
+        BigDecimal alreadyBilled = sum(lines.billedBaseQuantities(receiptId, productId));
+        if (received.signum() == 0 || alreadyBilled.add(baseQuantity).compareTo(received) > 0) {
+            throw new IllegalArgumentException("Bill quantity is larger than the goods received.");
         }
     }
 

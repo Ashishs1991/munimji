@@ -12,7 +12,7 @@ Working project name. Planning documents are specifications, not implemented fea
 
 Open this folder in Cursor and read the PRD and RFC before implementing. Begin with one verified receive → locate → sell → correct → remind workflow. The agreed MVP supports two isolated businesses. Tally and e-way bill integrations are optional add-ons.
 
-The application is Java and Spring Boot, with PostgreSQL/Supabase and a Thymeleaf dashboard still to come. Settings and API keys are mapped in `src/main/resources/application.yml` and supplied from a local `.env` file. Copy `.env.example` to `.env` and fill in values there. Run `./mvnw test` with Docker running. The app has a health check, businesses, godowns, a catalog, parties, opening stock, and customer posting. The next milestone is purchases, keeping a supplier bill separate from the goods received.
+The application is Java and Spring Boot, with PostgreSQL/Supabase and a Thymeleaf dashboard still to come. Settings and API keys are mapped in `src/main/resources/application.yml` and supplied from a local `.env` file. Copy `.env.example` to `.env` and fill in values there. Run `./mvnw test` with Docker running. The app has a health check, businesses, godowns, a catalog, parties, opening stock, customer posting, and supplier bills kept apart from goods receipts. The next milestone is sales and receipts: invoice numbers, and money received that is not yet applied to an invoice.
 
 ## Hackathon contribution record
 

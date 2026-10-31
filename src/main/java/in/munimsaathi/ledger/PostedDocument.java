@@ -39,6 +39,21 @@ public class PostedDocument {
     @Column(name = "source_document_id")
     private UUID sourceDocumentId;
 
+    @Enumerated(EnumType.STRING)
+    @Column(name = "finance_status", nullable = false)
+    private FinanceStatus financeStatus;
+
+    @Column(name = "bill_number")
+    private String billNumber;
+
+    @Column(name = "period_start")
+    private LocalDate periodStart;
+
+    @Column(name = "period_end")
+    private LocalDate periodEnd;
+
+    private String fingerprint;
+
     protected PostedDocument() {
     }
 
@@ -50,7 +65,8 @@ public class PostedDocument {
             LocalDate occurredOn,
             Long totalPaise,
             UUID operationId,
-            UUID sourceDocumentId
+            UUID sourceDocumentId,
+            FinanceStatus financeStatus
     ) {
         this.id = id;
         this.businessId = businessId;
@@ -60,6 +76,18 @@ public class PostedDocument {
         this.totalPaise = totalPaise;
         this.operationId = operationId;
         this.sourceDocumentId = sourceDocumentId;
+        this.financeStatus = financeStatus;
+    }
+
+    void describeBill(String billNumber, LocalDate periodStart, LocalDate periodEnd, String fingerprint) {
+        this.billNumber = billNumber;
+        this.periodStart = periodStart;
+        this.periodEnd = periodEnd;
+        this.fingerprint = fingerprint;
+    }
+
+    void markFinance(FinanceStatus financeStatus) {
+        this.financeStatus = financeStatus;
     }
 
     public UUID getId() {
@@ -80,5 +108,17 @@ public class PostedDocument {
 
     public Long getTotalPaise() {
         return totalPaise;
+    }
+
+    public FinanceStatus getFinanceStatus() {
+        return financeStatus;
+    }
+
+    public String getBillNumber() {
+        return billNumber;
+    }
+
+    public String getFingerprint() {
+        return fingerprint;
     }
 }
