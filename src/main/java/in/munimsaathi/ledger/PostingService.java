@@ -21,6 +21,7 @@ import org.springframework.transaction.annotation.Transactional;
 import java.math.BigDecimal;
 import java.time.Instant;
 import java.time.LocalDate;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
@@ -290,6 +291,91 @@ public class PostingService {
                 operationId,
                 occurredAt
         ));
+        return document.getId();
+    }
+
+    @Transactional
+    public UUID sellLines(
+            UUID userId,
+            UUID operationId,
+            UUID customerId,
+            UUID locationId,
+            List<SaleLine> saleLines,
+            LocalDate occurredOn,
+            Instant occurredAt
+    ) {
+        UUID businessId = tenants.currentBusinessId(userId);
+        Optional<UUID> prior = alreadyPosted(businessId, operationId);
+        if (prior.isPresent()) {
+            return prior.get();
+        }
+        if (saleLines == null || saleLines.isEmpty()) {
+            throw new IllegalArgumentException("A sale needs at least one line.");
+        }
+        requireParty(businessId, customerId, PartyRole.CUSTOMER);
+        requireGodown(businessId, locationId);
+        requireWhen(occurredOn, occurredAt);
+        List<QuantityConversion> conversions = new ArrayList<>();
+        boolean priced = true;
+        long total = 0;
+        for (SaleLine saleLine : saleLines) {
+            conversions.add(catalog.convert(
+                    userId, saleLine.productId(), saleLine.displayQuantity(), saleLine.unitLabel()
+            ));
+            if (saleLine.amountPaise() == null) {
+                priced = false;
+            } else {
+                requirePositive(saleLine.amountPaise());
+                total = Math.addExact(total, saleLine.amountPaise());
+            }
+        }
+        operations.saveAndFlush(new PostedOperation(operationId, businessId, priced ? "SALE" : "DISPATCH", userId));
+        PostedDocument document = documents.saveAndFlush(new PostedDocument(
+                UUID.randomUUID(),
+                businessId,
+                customerId,
+                DocumentKind.SALE,
+                occurredOn,
+                priced ? total : null,
+                operationId,
+                null,
+                priced ? FinanceStatus.RECORDED : FinanceStatus.PENDING
+        ));
+        for (int index = 0; index < saleLines.size(); index++) {
+            SaleLine saleLine = saleLines.get(index);
+            lines.save(line(
+                    document.getId(),
+                    saleLine.productId(),
+                    locationId,
+                    conversions.get(index),
+                    saleLine.amountPaise(),
+                    false
+            ));
+            stock.add(change(
+                    businessId,
+                    saleLine.productId(),
+                    locationId,
+                    conversions.get(index),
+                    conversions.get(index).baseQuantity().negate(),
+                    StockReason.SALE,
+                    operationId,
+                    occurredAt
+            ));
+        }
+        if (priced) {
+            ledger.save(new PartyLedgerEntry(
+                    UUID.randomUUID(),
+                    businessId,
+                    customerId,
+                    AccountSide.RECEIVABLE,
+                    total,
+                    LedgerReason.SALE,
+                    document.getId(),
+                    operationId,
+                    occurredAt
+            ));
+            issueInvoiceNumber(businessId, document.getId());
+        }
         return document.getId();
     }
 

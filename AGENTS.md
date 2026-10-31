@@ -42,7 +42,7 @@ Milestone 0 is done. Build the next undone milestone only. The books come before
 | 12 | Dashboard and low stock | F08, F12 | Done. Overview, stock by godown, money, and pending work match the database for the same date. Low-stock alerts use an owner threshold and do not pretend to be forecasts. |
 | 13 | Text interpretation | F02 | Done. A Hindi or Hinglish command becomes a validated draft through the Meta client. Tests use a fake client. Instructions inside a bill cannot authorize a tool. |
 | 14 | Photos and documents | F02, F04 | Done. A photo or PDF attaches to one open draft and preserves its source. Extraction proposes fields. The owner still approves before any stock or money changes. |
-| 15 | Voice receipts | F02, F14 | A voice note is transcribed and becomes one atomic multi-item draft. Unresolved lines are not dropped. “Five boxes” does not become five pieces without a confirmed conversion. |
+| 15 | Voice receipts | F02, F14 | Done. A voice note is transcribed and becomes one atomic multi-item draft. Unresolved lines are not dropped. “Five boxes” does not become five pieces without a confirmed conversion. |
 | 16 | Durable jobs | F10 | PostgreSQL stores due work, leases, and outcomes. `@Scheduled` only wakes the poller. A restart does not claim the same live lease twice. |
 | 17 | Reminders and sends | F10 | Owner reminders and customer sends are different tasks. Full payment suppresses the send. A changed balance needs a new approval. Cancellation wins before dispatch. One consenting test send is recorded with its real provider status. |
 | 18 | Forecasts | F13 | A 7-day baseline runs only on eligible covered sales. Thin history returns insufficient history. Opening stock, transfers, and purchases are not treated as demand. Reorder suggestions stop when lead time or inbound stock is unknown. |
@@ -76,3 +76,4 @@ Out of these milestones: video shelf counting, GST return filing, bank access, a
 - [Dashboard and low stock](doc/features/dashboard-and-low-stock/AGENTS.md)
 - [Text interpretation](doc/features/text-interpretation/AGENTS.md)
 - [Photos and documents](doc/features/photos-and-documents/AGENTS.md)
+- [Voice receipts](doc/features/voice-receipts/AGENTS.md)

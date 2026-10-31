@@ -2,6 +2,7 @@ package in.munimsaathi.draft;
 
 import in.munimsaathi.ledger.PostingService;
 import in.munimsaathi.ledger.PostedDocumentRepository;
+import in.munimsaathi.ledger.SaleLine;
 import in.munimsaathi.tenant.TenantContext;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -25,6 +26,7 @@ public class DraftBook {
 
     private final TenantContext tenants;
     private final DraftRepository drafts;
+    private final DraftLineRepository draftLines;
     private final ApprovalRepository approvals;
     private final PostingService posting;
     private final PostedDocumentRepository documents;
@@ -32,12 +34,14 @@ public class DraftBook {
     public DraftBook(
             TenantContext tenants,
             DraftRepository drafts,
+            DraftLineRepository draftLines,
             ApprovalRepository approvals,
             PostingService posting,
             PostedDocumentRepository documents
     ) {
         this.tenants = tenants;
         this.drafts = drafts;
+        this.draftLines = draftLines;
         this.approvals = approvals;
         this.posting = posting;
         this.documents = documents;
@@ -60,6 +64,83 @@ public class DraftBook {
         Draft draft = new Draft(UUID.randomUUID(), businessId, userId);
         fill(draft, action, customerId, productId, locationId, quantity, unit, amountPaise, occurredOn, occurredAt);
         return view(drafts.save(draft));
+    }
+
+    @Transactional
+    public DraftProposal proposeLines(
+            UUID userId,
+            String action,
+            UUID customerId,
+            UUID locationId,
+            List<DraftLineSpec> lines,
+            LocalDate occurredOn,
+            Instant occurredAt
+    ) {
+        if (lines == null || lines.isEmpty()) {
+            throw new IllegalArgumentException("A voice receipt needs every line, including unresolved ones.");
+        }
+        UUID businessId = tenants.currentBusinessId(userId);
+        Draft draft = new Draft(UUID.randomUUID(), businessId, userId);
+        String kind = actionKind(action);
+        List<String> missing = new ArrayList<>();
+        if (kind == null) {
+            missing.add("action");
+        }
+        if (occurredOn == null || occurredAt == null) {
+            missing.add("date");
+        }
+        if (locationId == null) {
+            missing.add("location");
+        }
+        if (customerId == null) {
+            missing.add("party");
+        }
+        StringBuilder lineCanon = new StringBuilder();
+        for (int index = 0; index < lines.size(); index++) {
+            DraftLineSpec line = lines.get(index);
+            if (line.unresolved() != null) {
+                missing.add("line-" + (index + 1));
+            }
+            lineCanon.append(index + 1)
+                    .append("|").append(text(line.productId()))
+                    .append("|").append(line.displayQuantity() == null ? "" : line.displayQuantity().stripTrailingZeros().toPlainString())
+                    .append("|").append(text(line.unitLabel()))
+                    .append("|").append(line.amountPaise() == null ? "" : line.amountPaise())
+                    .append("|").append(text(line.unresolved()))
+                    .append(";");
+        }
+        long nextVersion = draft.getVersion() + 1;
+        String hash = hash(nextVersion, kind, customerId, null, locationId, null, null, null, occurredOn, occurredAt, lineCanon.toString());
+        draft.replace(
+                kind,
+                missing.isEmpty() ? DraftStatus.AWAITING_APPROVAL : DraftStatus.NEEDS_CLARIFICATION,
+                hash,
+                customerId,
+                null,
+                locationId,
+                null,
+                null,
+                null,
+                occurredOn,
+                occurredAt,
+                String.join(",", missing),
+                Instant.now().plus(2, ChronoUnit.HOURS)
+        );
+        drafts.save(draft);
+        for (int index = 0; index < lines.size(); index++) {
+            DraftLineSpec line = lines.get(index);
+            draftLines.save(new DraftLine(
+                    UUID.randomUUID(),
+                    draft.getId(),
+                    index + 1,
+                    line.productId(),
+                    line.displayQuantity(),
+                    line.unitLabel(),
+                    line.amountPaise(),
+                    line.unresolved()
+            ));
+        }
+        return view(draft);
     }
 
     @Transactional
@@ -134,6 +215,28 @@ public class DraftBook {
     }
 
     private UUID post(UUID userId, Draft draft) {
+        List<DraftLine> rows = draftLines.findByDraftIdOrderByLineNumberAsc(draft.getId());
+        if (!rows.isEmpty()) {
+            List<SaleLine> saleLines = new ArrayList<>();
+            for (DraftLine row : rows) {
+                if (row.getUnresolved() != null || row.getProductId() == null
+                        || row.getDisplayQuantity() == null || row.getUnitLabel() == null) {
+                    throw new IllegalArgumentException("This approval is no longer current.");
+                }
+                saleLines.add(new SaleLine(
+                        row.getProductId(), row.getDisplayQuantity(), row.getUnitLabel(), row.getAmountPaise()
+                ));
+            }
+            return posting.sellLines(
+                    userId,
+                    draft.getId(),
+                    draft.getCustomerId(),
+                    draft.getLocationId(),
+                    saleLines,
+                    draft.getOccurredOn(),
+                    draft.getOccurredAt()
+            );
+        }
         if (draft.getAmountPaise() == null) {
             return posting.dispatch(
                     userId,
@@ -184,7 +287,7 @@ public class DraftBook {
         List<String> missing = missing(kind, customerId, productId, locationId, quantity, unitLabel, amountPaise, occurredOn, occurredAt);
         boolean ready = missing.stream().allMatch("price"::equals);
         long nextVersion = draft.getVersion() + 1;
-        String hash = hash(nextVersion, kind, customerId, productId, locationId, quantity, unitLabel, amountPaise, occurredOn, occurredAt);
+        String hash = hash(nextVersion, kind, customerId, productId, locationId, quantity, unitLabel, amountPaise, occurredOn, occurredAt, "");
         draft.replace(
                 kind,
                 ready ? DraftStatus.AWAITING_APPROVAL : DraftStatus.NEEDS_CLARIFICATION,
@@ -269,7 +372,8 @@ public class DraftBook {
             String unit,
             Long amountPaise,
             LocalDate occurredOn,
-            Instant occurredAt
+            Instant occurredAt,
+            String extra
     ) {
         String canonical = version
                 + "|" + text(kind)
@@ -280,7 +384,8 @@ public class DraftBook {
                 + "|" + text(unit)
                 + "|" + (amountPaise == null ? "" : amountPaise)
                 + "|" + text(occurredOn)
-                + "|" + text(occurredAt);
+                + "|" + text(occurredAt)
+                + "|" + text(extra);
         try {
             byte[] digest = MessageDigest.getInstance("SHA-256").digest(canonical.getBytes(StandardCharsets.UTF_8));
             return HexFormat.of().formatHex(digest);
