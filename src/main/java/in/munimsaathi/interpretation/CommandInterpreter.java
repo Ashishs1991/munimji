@@ -1,0 +1,180 @@
+package in.munimsaathi.interpretation;
+
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import in.munimsaathi.catalog.CatalogService;
+import in.munimsaathi.catalog.Party;
+import in.munimsaathi.catalog.PartyBook;
+import in.munimsaathi.catalog.PartyRole;
+import in.munimsaathi.catalog.Product;
+import in.munimsaathi.draft.DraftBook;
+import in.munimsaathi.draft.DraftProposal;
+import in.munimsaathi.tenant.Godown;
+import in.munimsaathi.tenant.GodownRepository;
+import in.munimsaathi.tenant.TenantContext;
+import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
+
+import java.math.BigDecimal;
+import java.time.Instant;
+import java.time.LocalDate;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Locale;
+import java.util.Set;
+import java.util.UUID;
+
+@Service
+public class CommandInterpreter {
+
+    private static final Set<String> READ_TOOLS = Set.of(
+            "search_products",
+            "get_party_candidates",
+            "get_stock",
+            "locate_goods",
+            "get_forecast",
+            "get_import_status",
+            "get_party_balance",
+            "get_sales_summary"
+    );
+
+    private final LanguageModel model;
+    private final ObjectMapper mapper;
+    private final TenantContext tenants;
+    private final PartyBook parties;
+    private final CatalogService catalog;
+    private final GodownRepository godowns;
+    private final DraftBook drafts;
+
+    public CommandInterpreter(
+            LanguageModel model,
+            ObjectMapper mapper,
+            TenantContext tenants,
+            PartyBook parties,
+            CatalogService catalog,
+            GodownRepository godowns,
+            DraftBook drafts
+    ) {
+        this.model = model;
+        this.mapper = mapper;
+        this.tenants = tenants;
+        this.parties = parties;
+        this.catalog = catalog;
+        this.godowns = godowns;
+        this.drafts = drafts;
+    }
+
+    @Transactional
+    public InterpretationOutcome interpret(UUID userId, String text, LocalDate occurredOn, Instant occurredAt) {
+        if (text == null || text.isBlank()) {
+            throw new IllegalArgumentException("A command is required.");
+        }
+        JsonNode reply;
+        try {
+            reply = mapper.readTree(model.complete(text));
+        } catch (IllegalArgumentException exception) {
+            throw exception;
+        } catch (Exception exception) {
+            throw new IllegalArgumentException("The model reply was not readable.", exception);
+        }
+        List<String> refused = refusedTools(reply);
+        String intent = text(reply, "intent");
+        String action = "sale".equalsIgnoreCase(intent) ? "sale" : null;
+        UUID customerId = party(userId, text(reply, "party_name"));
+        UUID productId = product(userId, text(reply, "product_name"));
+        UUID locationId = location(userId, text(reply, "location_code"));
+        BigDecimal quantity = quantity(reply.get("quantity"));
+        String unit = text(reply, "unit");
+        Long amount = amount(reply.get("amount_paise"));
+        if (action == null && customerId == null && productId == null && locationId == null
+                && quantity == null && unit == null && amount == null) {
+            return new InterpretationOutcome(null, refused);
+        }
+        DraftProposal draft = drafts.propose(
+                userId, action, customerId, productId, locationId, quantity, unit, amount, occurredOn, occurredAt
+        );
+        return new InterpretationOutcome(draft, refused);
+    }
+
+    private List<String> refusedTools(JsonNode reply) {
+        List<String> refused = new ArrayList<>();
+        JsonNode tools = reply.get("requested_tools");
+        if (tools == null || !tools.isArray()) {
+            return List.of();
+        }
+        for (JsonNode tool : tools) {
+            String name = tool.asText();
+            if (!READ_TOOLS.contains(name)) {
+                refused.add(name);
+            }
+        }
+        return List.copyOf(refused);
+    }
+
+    private UUID party(UUID userId, String name) {
+        if (name == null) {
+            return null;
+        }
+        List<Party> matches = parties.findByName(userId, name).stream()
+                .filter(party -> party.getRole() == PartyRole.CUSTOMER || party.getRole() == PartyRole.BOTH)
+                .toList();
+        return matches.size() == 1 ? matches.get(0).getId() : null;
+    }
+
+    private UUID product(UUID userId, String name) {
+        if (name == null) {
+            return null;
+        }
+        var approved = catalog.resolveApproved(userId, name);
+        if (approved.isPresent()) {
+            return approved.get().getId();
+        }
+        List<Product> matches = catalog.candidates(userId, name);
+        return matches.size() == 1 ? matches.get(0).getId() : null;
+    }
+
+    private UUID location(UUID userId, String code) {
+        if (code == null) {
+            return null;
+        }
+        UUID businessId = tenants.currentBusinessId(userId);
+        String wanted = code.toLowerCase(Locale.ROOT);
+        List<Godown> matches = godowns.findByBusinessIdOrderByCodeAsc(businessId).stream()
+                .filter(godown -> godown.getCode().equalsIgnoreCase(wanted) || godown.getName().equalsIgnoreCase(code))
+                .toList();
+        return matches.size() == 1 ? matches.get(0).getId() : null;
+    }
+
+    private static BigDecimal quantity(JsonNode node) {
+        if (node == null || node.isNull()) {
+            return null;
+        }
+        String raw = node.isNumber() ? node.decimalValue().toPlainString() : node.asText();
+        if (raw == null || !raw.matches("-?\\d+(\\.\\d+)?")) {
+            return null;
+        }
+        return new BigDecimal(raw);
+    }
+
+    private static Long amount(JsonNode node) {
+        if (node == null || node.isNull()) {
+            return null;
+        }
+        if (node.isIntegralNumber()) {
+            return node.longValue();
+        }
+        if (node.isTextual() && node.asText().matches("\\d+")) {
+            return Long.parseLong(node.asText());
+        }
+        return null;
+    }
+
+    private static String text(JsonNode reply, String field) {
+        JsonNode node = reply.get(field);
+        if (node == null || node.isNull()) {
+            return null;
+        }
+        String value = node.asText();
+        return value == null || value.isBlank() || "null".equals(value) ? null : value.trim();
+    }
+}
