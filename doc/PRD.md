@@ -1,6 +1,6 @@
 # PRD — Vyapar Agent: Digitize My Business
 
-Version: 1.2 · Date: 31 October 2026 · Status: proposed implementation baseline
+Version: 1.3 · Date: 31 October 2026 · Status: proposed implementation baseline
 
 Project owner: Ashish · Market: Agra MSMEs · Primary demo: brother-in-law’s plastic-bag wholesale business (name to be confirmed)
 
@@ -20,10 +20,18 @@ The product is generic across the supported retail/wholesale workflows; it does 
 
 ### Revision decisions
 
+- Selected Java + Spring Boot for implementation, reflecting Ashish’s stronger Java experience; product scope and acceptance criteria are unchanged.
+
 - Added location memory, godown transfers, multi-item Hindi voice commands, two tenants, historical imports, demand forecasting, and actual scheduled sends to MVP.
 - Moved ongoing Tally sync and e-way bill generation to optional connectors.
 - Made the assistant database the post-cutover operational source of truth.
 - Retained approvals, provenance, deterministic quantities/money, and recovery from duplicates or uncertain outcomes.
+
+### Implementation baseline
+
+Build one modular Java + Spring Boot application with PostgreSQL/Supabase as the operational database, Spring Data JPA and Flyway for persistence/migrations, and a Thymeleaf + Bootstrap dashboard with modest JavaScript. Call Meta models directly through Spring RestClient; validate structured model proposals before executing approved business operations. Use private object storage for evidence and PostgreSQL-backed jobs for durable reminders and external actions. Scheduled work must survive restarts; an in-memory timer alone is insufficient.
+
+Forecasting uses deterministic Java calculations over eligible history. A Python service, model training, a separate frontend application and an agent framework are not required for MVP. Tally remains an optional connector. Detailed choices, security boundaries and test requirements are in the [RFC](RFC-001.md).
 
 ## 2. Problem and evidence
 
