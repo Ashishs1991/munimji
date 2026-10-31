@@ -107,7 +107,7 @@ class OfficeFolderFixtureTest {
                     assertThat(movement.getSignedBaseQuantity()).isEqualByComparingTo("-10");
                 });
 
-        posting.receivePayment(shop.userId(), payment, shop.customerId(), saleId, Paise.fromRupees(400), DAY, AT);
+        posting.receivePayment(shop.userId(), payment, shop.customerId(), saleId, Paise.fromRupees(400), "cash", DAY, AT);
         assertBooks(shop, "60", Paise.fromRupees(600));
         assertThat(movements.findByOperationId(payment)).isEmpty();
         assertThat(allocations.allocatedTo(saleId)).isEqualTo(Paise.fromRupees(400));
@@ -134,7 +134,7 @@ class OfficeFolderFixtureTest {
                 shop.userId(), saleOp, shop.customerId(), shop.productId(), shop.godownId(),
                 BigDecimal.ONE, "box", Paise.fromRupees(1000), DAY, AT
         );
-        posting.receivePayment(shop.userId(), payment, shop.customerId(), saleId, Paise.fromRupees(400), DAY, AT);
+        posting.receivePayment(shop.userId(), payment, shop.customerId(), saleId, Paise.fromRupees(400), "cash", DAY, AT);
         posting.acceptReturn(
                 shop.userId(), returned, shop.customerId(), saleId, shop.productId(), shop.godownId(),
                 new BigDecimal("2"), "piece", Paise.fromRupees(200), true, DAY, AT
@@ -185,7 +185,7 @@ class OfficeFolderFixtureTest {
         );
 
         assertThatThrownBy(() -> posting.receivePayment(
-                shop.userId(), UUID.randomUUID(), shop.customerId(), saleId, Paise.fromRupees(1001), DAY, AT
+                shop.userId(), UUID.randomUUID(), shop.customerId(), saleId, Paise.fromRupees(1001), "cash", DAY, AT
         )).isInstanceOf(IllegalArgumentException.class);
 
         assertBooks(shop, "40", Paise.fromRupees(1000));

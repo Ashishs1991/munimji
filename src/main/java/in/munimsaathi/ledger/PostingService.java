@@ -37,6 +37,8 @@ public class PostingService {
     private final PartyLedgerRepository ledger;
     private final AllocationRepository allocations;
     private final BillReviewRepository reviews;
+    private final InvoiceCounterRepository invoiceCounters;
+    private final InvoiceNumberRepository invoiceNumbers;
     private final StockPosting stock;
 
     public PostingService(
@@ -50,6 +52,8 @@ public class PostingService {
             PartyLedgerRepository ledger,
             AllocationRepository allocations,
             BillReviewRepository reviews,
+            InvoiceCounterRepository invoiceCounters,
+            InvoiceNumberRepository invoiceNumbers,
             StockPosting stock
     ) {
         this.tenants = tenants;
@@ -62,6 +66,8 @@ public class PostingService {
         this.ledger = ledger;
         this.allocations = allocations;
         this.reviews = reviews;
+        this.invoiceCounters = invoiceCounters;
+        this.invoiceNumbers = invoiceNumbers;
         this.stock = stock;
     }
 
@@ -232,6 +238,7 @@ public class PostingService {
                 operationId,
                 occurredAt
         ));
+        issueInvoiceNumber(businessId, document.getId());
         return document.getId();
     }
 
@@ -242,6 +249,7 @@ public class PostingService {
             UUID customerId,
             UUID saleDocumentId,
             long amountPaise,
+            String paymentMethod,
             LocalDate occurredOn,
             Instant occurredAt
     ) {
@@ -251,12 +259,94 @@ public class PostingService {
             return prior.get();
         }
         requirePositive(amountPaise);
+        String method = requirePaymentMethod(paymentMethod);
         requireParty(businessId, customerId, PartyRole.CUSTOMER);
         requireWhen(occurredOn, occurredAt);
         PostedDocument sale = requireSale(businessId, customerId, saleDocumentId);
         requireWithinOutstanding(sale, amountPaise);
+        return postReceipt(userId, businessId, operationId, customerId, sale.getId(), amountPaise, method, occurredOn, occurredAt);
+    }
+
+    @Transactional
+    public UUID receiveUnallocated(
+            UUID userId,
+            UUID operationId,
+            UUID customerId,
+            long amountPaise,
+            String paymentMethod,
+            LocalDate occurredOn,
+            Instant occurredAt
+    ) {
+        UUID businessId = tenants.currentBusinessId(userId);
+        Optional<UUID> prior = alreadyPosted(businessId, operationId);
+        if (prior.isPresent()) {
+            return prior.get();
+        }
+        requirePositive(amountPaise);
+        String method = requirePaymentMethod(paymentMethod);
+        requireParty(businessId, customerId, PartyRole.CUSTOMER);
+        requireWhen(occurredOn, occurredAt);
+        return postReceipt(userId, businessId, operationId, customerId, null, amountPaise, method, occurredOn, occurredAt);
+    }
+
+    @Transactional
+    public void cancelInvoice(UUID userId, UUID operationId, UUID saleDocumentId) {
+        UUID businessId = tenants.currentBusinessId(userId);
+        if (operationId == null) {
+            throw new IllegalArgumentException("An operation id is required.");
+        }
+        if (operations.existsById(operationId)) {
+            return;
+        }
+        PostedDocument sale = documents.findById(saleDocumentId)
+                .orElseThrow(() -> new IllegalArgumentException("Unknown sale."));
+        if (!sale.getBusinessId().equals(businessId) || sale.getKind() != DocumentKind.SALE) {
+            throw new IllegalArgumentException("Unknown sale.");
+        }
+        InvoiceNumber invoiceNumber = invoiceNumbers.findByDocumentId(sale.getId())
+                .orElseThrow(() -> new IllegalArgumentException("Unknown invoice."));
+        if (!invoiceNumber.getBusinessId().equals(businessId)) {
+            throw new IllegalArgumentException("Unknown invoice.");
+        }
+        if (invoiceNumber.getStatus() == InvoiceNumberStatus.CANCELED) {
+            throw new IllegalArgumentException("This invoice number is already canceled.");
+        }
+        operations.saveAndFlush(new PostedOperation(operationId, businessId, "INVOICE_CANCEL", userId));
+        invoiceNumber.cancel();
+    }
+
+    @Transactional(readOnly = true)
+    public long unappliedReceiptPaise(UUID userId, UUID partyId) {
+        UUID businessId = tenants.currentBusinessId(userId);
+        requireParty(businessId, partyId, PartyRole.CUSTOMER);
+        long unapplied = 0;
+        List<PartyLedgerEntry> receipts = ledger.findByBusinessIdAndPartyIdAndAccountSideAndReason(
+                businessId,
+                partyId,
+                AccountSide.RECEIVABLE,
+                LedgerReason.RECEIPT
+        );
+        for (PartyLedgerEntry entry : receipts) {
+            long paid = Math.negateExact(entry.getSignedPaise());
+            long applied = allocations.findBySourceEntryId(entry.getId()).map(Allocation::getAmountPaise).orElse(0L);
+            unapplied = Paise.add(unapplied, Paise.subtract(paid, applied));
+        }
+        return unapplied;
+    }
+
+    private UUID postReceipt(
+            UUID userId,
+            UUID businessId,
+            UUID operationId,
+            UUID customerId,
+            UUID saleDocumentId,
+            long amountPaise,
+            String paymentMethod,
+            LocalDate occurredOn,
+            Instant occurredAt
+    ) {
         operations.saveAndFlush(new PostedOperation(operationId, businessId, "CUSTOMER_RECEIPT", userId));
-        PostedDocument document = documents.saveAndFlush(new PostedDocument(
+        PostedDocument document = new PostedDocument(
                 UUID.randomUUID(),
                 businessId,
                 customerId,
@@ -264,9 +354,11 @@ public class PostingService {
                 occurredOn,
                 amountPaise,
                 operationId,
-                sale.getId(),
+                saleDocumentId,
                 FinanceStatus.RECORDED
-        ));
+        );
+        document.recordPaymentMethod(paymentMethod);
+        documents.saveAndFlush(document);
         PartyLedgerEntry entry = ledger.saveAndFlush(new PartyLedgerEntry(
                 UUID.randomUUID(),
                 businessId,
@@ -278,15 +370,32 @@ public class PostingService {
                 operationId,
                 occurredAt
         ));
-        allocations.save(new Allocation(
-                UUID.randomUUID(),
-                businessId,
-                entry.getId(),
-                sale.getId(),
-                AccountSide.RECEIVABLE,
-                amountPaise
-        ));
+        if (saleDocumentId != null) {
+            allocations.save(new Allocation(
+                    UUID.randomUUID(),
+                    businessId,
+                    entry.getId(),
+                    saleDocumentId,
+                    AccountSide.RECEIVABLE,
+                    amountPaise
+            ));
+        }
         return document.getId();
+    }
+
+    private void issueInvoiceNumber(UUID businessId, UUID documentId) {
+        InvoiceCounter counter = invoiceCounters.lock(businessId).orElseGet(() -> {
+            invoiceCounters.saveAndFlush(new InvoiceCounter(businessId));
+            return invoiceCounters.lock(businessId).orElseThrow();
+        });
+        invoiceNumbers.save(new InvoiceNumber(UUID.randomUUID(), businessId, counter.issueNext(), documentId));
+    }
+
+    private static String requirePaymentMethod(String paymentMethod) {
+        if (paymentMethod == null || paymentMethod.isBlank()) {
+            throw new IllegalArgumentException("A payment method is required.");
+        }
+        return paymentMethod.trim();
     }
 
     @Transactional

@@ -71,4 +71,8 @@ public class PartyLedgerEntry {
     public UUID getId() {
         return id;
     }
+
+    public long getSignedPaise() {
+        return signedPaise;
+    }
 }

@@ -4,6 +4,7 @@ import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
+import java.util.List;
 import java.util.UUID;
 
 public interface PartyLedgerRepository extends JpaRepository<PartyLedgerEntry, UUID> {
@@ -18,4 +19,11 @@ public interface PartyLedgerRepository extends JpaRepository<PartyLedgerEntry, U
     long receivablePaise(@Param("businessId") UUID businessId, @Param("partyId") UUID partyId);
 
     long countByPartyId(UUID partyId);
+
+    List<PartyLedgerEntry> findByBusinessIdAndPartyIdAndAccountSideAndReason(
+            UUID businessId,
+            UUID partyId,
+            AccountSide accountSide,
+            LedgerReason reason
+    );
 }

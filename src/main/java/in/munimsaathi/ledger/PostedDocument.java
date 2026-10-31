@@ -54,6 +54,9 @@ public class PostedDocument {
 
     private String fingerprint;
 
+    @Column(name = "payment_method")
+    private String paymentMethod;
+
     protected PostedDocument() {
     }
 
@@ -90,6 +93,10 @@ public class PostedDocument {
         this.financeStatus = financeStatus;
     }
 
+    void recordPaymentMethod(String paymentMethod) {
+        this.paymentMethod = paymentMethod;
+    }
+
     public UUID getId() {
         return id;
     }
@@ -120,5 +127,9 @@ public class PostedDocument {
 
     public String getFingerprint() {
         return fingerprint;
+    }
+
+    public String getPaymentMethod() {
+        return paymentMethod;
     }
 }

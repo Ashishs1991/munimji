@@ -34,7 +34,7 @@ Milestone 0 is done. Build the next undone milestone only. The books come before
 | 4 | Opening stock | F01 | Done. A confirmed count sets stock once. Repeating the approval does not add quantity again. A recount is an adjustment. Unknown expiry stays unknown. |
 | 5 | Posting core | F06 | Done. The office-folder fixture posts stock and paise once: open, receive, sell, take ₹400, return. Replaying webhooks or approvals leaves 62 pieces and ₹400 outstanding. |
 | 6 | Purchases | F04 | Done. A supplier bill and a goods receipt keep separate quantities. Stock rises by received quantity. Unknown price can post stock with finance still pending. A later bill does not add stock again. Duplicate bill fingerprints need review. |
-| 7 | Sales and receipts | F05, F06 | A sale deducts stock once and refuses to go negative. Invoice amount and money received stay separate. Unallocated receipts stay unapplied. Invoice numbers are not reused. |
+| 7 | Sales and receipts | F05, F06 | Done. A sale deducts stock once and refuses to go negative. Invoice amount and money received stay separate. Unallocated receipts stay unapplied. Invoice numbers are not reused. |
 | 8 | Supplier balances | F06 | Approved purchase bills raise payables. Receipt of goods alone does not invent a price. Partial supplier payments work. The same party’s receivable and payable are never netted automatically. |
 | 9 | Returns and corrections | F07 | Posted rows stay immutable. A return restocks only when restock is approved. Credit is not a cash refund. The correction records reason and approver. |
 | 10 | Locations and transfers | F14 | “Agarwal box” has an approved meaning. Godown 3 is remembered without creating a purchase. Receive 1 A and 5 G, sell 1 A and 3 G, transfer 1 G: A is 0, G is 1 and 1. Customer-owned stock is not sellable. |
@@ -68,3 +68,4 @@ Out of these milestones: video shelf counting, GST return filing, bank access, a
 - [Opening stock](doc/features/opening-stock/AGENTS.md)
 - [Posting core](doc/features/posting-core/AGENTS.md)
 - [Purchases](doc/features/purchases/AGENTS.md)
+- [Sales and receipts](doc/features/sales-and-receipts/AGENTS.md)

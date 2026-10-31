@@ -24,4 +24,4 @@ Docker must be running.
 
 ## Still open
 
-An approved bill does not yet raise a supplier payable. Invoice numbers and unallocated customer receipts are the next milestone.
+An approved bill does not yet raise a supplier payable. That is the next milestone.

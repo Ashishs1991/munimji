@@ -50,4 +50,8 @@ public class Allocation {
         this.accountSide = accountSide;
         this.amountPaise = amountPaise;
     }
+
+    public long getAmountPaise() {
+        return amountPaise;
+    }
 }

@@ -33,4 +33,8 @@ public class PostedOperation {
         this.kind = kind;
         this.actorId = actorId;
     }
+
+    public String getKind() {
+        return kind;
+    }
 }
