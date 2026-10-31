@@ -1,5 +1,6 @@
 package in.munimsaathi.jobs;
 
+import in.munimsaathi.reminder.ReminderBook;
 import org.springframework.stereotype.Service;
 
 import java.time.Duration;
@@ -14,9 +15,11 @@ public class JobWorker {
     static final String PING = "PING";
 
     private final JobClaims claims;
+    private final ReminderBook reminders;
 
-    public JobWorker(JobClaims claims) {
+    public JobWorker(JobClaims claims, ReminderBook reminders) {
         this.claims = claims;
+        this.reminders = reminders;
     }
 
     public UUID enqueue(UUID businessId, String kind, String payload, Instant dueAt) {
@@ -34,7 +37,14 @@ public class JobWorker {
             return;
         }
         Job job = claimed.get();
-        String outcome = PING.equals(job.getKind()) ? "recorded" : "ignored";
-        claims.complete(job.getId(), workerId, outcome, now);
+        if (PING.equals(job.getKind())) {
+            claims.complete(job.getId(), workerId, "recorded", now);
+            return;
+        }
+        if (ReminderBook.JOB_KIND.equals(job.getKind())) {
+            reminders.dispatch(job, workerId, now);
+            return;
+        }
+        claims.complete(job.getId(), workerId, "ignored", now);
     }
 }

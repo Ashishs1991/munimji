@@ -10,7 +10,8 @@ public record MunimProperties(
         Supabase supabase,
         Whatsapp whatsapp,
         Tally tally,
-        Eway eway
+        Eway eway,
+        Reminders reminders
 ) {
     public record Meta(String apiKey, String baseUrl, String reasoningModel, String transcriptionModel) {
     }
@@ -32,5 +33,8 @@ public record MunimProperties(
     }
 
     public record Eway(boolean enabled, String environment, String baseUrl, String clientId, String clientSecret) {
+    }
+
+    public record Reminders(int graceMinutes) {
     }
 }

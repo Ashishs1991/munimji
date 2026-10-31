@@ -46,6 +46,8 @@ munim:
     phone-number-id: ${WHATSAPP_PHONE_NUMBER_ID:}
     business-account-id: ${WHATSAPP_BUSINESS_ACCOUNT_ID:}
     graph-api-version: ${WHATSAPP_GRAPH_API_VERSION:}
+  reminders:
+    grace-minutes: ${REMINDER_GRACE_MINUTES:15}
   tally:
     enabled: ${TALLY_ENABLED:false}
     connector-token: ${TALLY_CONNECTOR_TOKEN:}

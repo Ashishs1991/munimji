@@ -31,7 +31,7 @@ class MetaTranscriberTest {
     @Test
     void aMissingKeyDoesNotCallTheModel() {
         MetaTranscriber transcriber = new MetaTranscriber(
-                new MunimProperties("Asia/Kolkata", "INR", new MunimProperties.Meta("", "", "muse-spark-1.3", "muse-voice-transcribe-1.0"), null, null, null, null),
+                new MunimProperties("Asia/Kolkata", "INR", new MunimProperties.Meta("", "", "muse-spark-1.3", "muse-voice-transcribe-1.0"), null, null, null, null, null),
                 RestClient.builder(),
                 new ObjectMapper()
         );
@@ -45,6 +45,7 @@ class MetaTranscriberTest {
                 "Asia/Kolkata",
                 "INR",
                 new MunimProperties.Meta("test-key", "https://meta.example", "muse-spark-1.3", "muse-voice-transcribe-1.0"),
+                null,
                 null,
                 null,
                 null,
