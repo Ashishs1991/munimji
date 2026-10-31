@@ -48,6 +48,10 @@ public class InvoiceNumber {
         return number;
     }
 
+    public UUID getDocumentId() {
+        return documentId;
+    }
+
     public InvoiceNumberStatus getStatus() {
         return status;
     }

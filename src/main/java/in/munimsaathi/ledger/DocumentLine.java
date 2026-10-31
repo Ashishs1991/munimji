@@ -73,6 +73,10 @@ public class DocumentLine {
         return documentId;
     }
 
+    public UUID getProductId() {
+        return productId;
+    }
+
     public UUID getLocationId() {
         return locationId;
     }

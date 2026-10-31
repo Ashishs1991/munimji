@@ -55,7 +55,7 @@ Optional, only after milestone 21 is pushed:
 | # | Milestone | PRD | Done when |
 |---|---|---|---|
 | 22 | Tally connector | F09 | An approved export can be read back from one selected company. A lost response stays unknown until reconciliation. The core app still posts when Tally is down. |
-| 23 | E-way connector | F11 | A sandbox submission stores an official identifier only after the provider accepts it. Unknown outcomes are not resubmitted blindly. A local PDF is not labeled as a generated e-way bill. |
+| 23 | E-way connector | F11 | Done. A sandbox submission stores an official identifier only after the provider accepts it. Unknown outcomes are not resubmitted blindly. A local PDF is not labeled as a generated e-way bill. |
 
 Out of these milestones: video shelf counting, GST return filing, bank access, automatic payment collection, payroll, manufacturing, and cross-business transfers.
 
@@ -83,3 +83,4 @@ Out of these milestones: video shelf counting, GST return filing, bank access, a
 - [Historical import](doc/features/historical-import/AGENTS.md)
 - [WhatsApp ingress](doc/features/whatsapp-ingress/AGENTS.md)
 - [Two-tenant demo](doc/features/two-tenant-demo/AGENTS.md)
+- [E-way connector](doc/features/eway-connector/AGENTS.md)

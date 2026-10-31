@@ -57,3 +57,6 @@ munim:
     base-url: ${EWAY_BASE_URL:}
     client-id: ${EWAY_CLIENT_ID:}
     client-secret: ${EWAY_CLIENT_SECRET:}
+    gstin: ${EWAY_GSTIN:}
+    username: ${EWAY_USERNAME:}
+    password: ${EWAY_PASSWORD:}

@@ -32,7 +32,16 @@ public record MunimProperties(
     public record Tally(boolean enabled, String connectorToken) {
     }
 
-    public record Eway(boolean enabled, String environment, String baseUrl, String clientId, String clientSecret) {
+    public record Eway(
+            boolean enabled,
+            String environment,
+            String baseUrl,
+            String clientId,
+            String clientSecret,
+            String gstin,
+            String username,
+            String password
+    ) {
     }
 
     public record Reminders(int graceMinutes) {

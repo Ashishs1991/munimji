@@ -1,0 +1,32 @@
+create table eway_drafts (
+    id uuid primary key,
+    business_id uuid not null references businesses (id),
+    document_id uuid not null references documents (id),
+    actor_id uuid not null,
+    status text not null,
+    environment text not null,
+    payload text not null,
+    payload_hash text not null,
+    approved_hash text,
+    version integer not null,
+    invoice_number bigint,
+    invoice_total_paise bigint,
+    invoice_date date,
+    operation_id uuid not null unique,
+    eway_bill_no text,
+    eway_bill_date text,
+    valid_upto text,
+    provider_status text,
+    error_text text,
+    constraint eway_drafts_status check (status in (
+        'VALIDATION_BLOCKED',
+        'AWAITING_APPROVAL',
+        'QUEUED',
+        'SUBMITTING',
+        'CONFIRMED',
+        'REJECTED',
+        'OUTCOME_UNKNOWN'
+    )),
+    constraint eway_drafts_environment check (environment in ('sandbox', 'production')),
+    constraint eway_drafts_business_document unique (business_id, document_id)
+);
