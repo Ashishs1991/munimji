@@ -844,6 +844,49 @@ public class PostingService {
         return refund.getId();
     }
 
+    @Transactional
+    public UUID recordOpeningReceivable(
+            UUID userId,
+            UUID operationId,
+            UUID partyId,
+            long amountPaise,
+            LocalDate occurredOn,
+            Instant occurredAt
+    ) {
+        UUID businessId = tenants.currentBusinessId(userId);
+        Optional<UUID> prior = alreadyPosted(businessId, operationId);
+        if (prior.isPresent()) {
+            return prior.get();
+        }
+        requirePositive(amountPaise);
+        requireParty(businessId, partyId, PartyRole.CUSTOMER);
+        requireWhen(occurredOn, occurredAt);
+        operations.saveAndFlush(new PostedOperation(operationId, businessId, "OPENING_RECEIVABLE", userId));
+        PostedDocument document = documents.saveAndFlush(new PostedDocument(
+                UUID.randomUUID(),
+                businessId,
+                partyId,
+                DocumentKind.OPENING,
+                occurredOn,
+                amountPaise,
+                operationId,
+                null,
+                FinanceStatus.RECORDED
+        ));
+        ledger.save(new PartyLedgerEntry(
+                UUID.randomUUID(),
+                businessId,
+                partyId,
+                AccountSide.RECEIVABLE,
+                amountPaise,
+                LedgerReason.OPENING,
+                document.getId(),
+                operationId,
+                occurredAt
+        ));
+        return document.getId();
+    }
+
     @Transactional(readOnly = true)
     public long customerReceivablePaise(UUID userId, UUID partyId) {
         UUID businessId = tenants.currentBusinessId(userId);
