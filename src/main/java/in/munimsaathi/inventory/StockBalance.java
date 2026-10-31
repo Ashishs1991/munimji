@@ -57,6 +57,10 @@ public class StockBalance {
         return quantity;
     }
 
+    public UUID getLocationId() {
+        return locationId;
+    }
+
     public long getVersion() {
         return version;
     }

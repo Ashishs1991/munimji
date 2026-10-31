@@ -15,6 +15,7 @@ public record SignedStockChange(
         BigDecimal factorToBase,
         StockReason reason,
         UUID operationId,
-        Instant occurredAt
+        Instant occurredAt,
+        Ownership ownership
 ) {
 }

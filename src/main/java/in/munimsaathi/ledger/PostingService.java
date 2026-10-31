@@ -6,6 +6,7 @@ import in.munimsaathi.catalog.Party;
 import in.munimsaathi.catalog.PartyRepository;
 import in.munimsaathi.catalog.PartyRole;
 import in.munimsaathi.catalog.QuantityConversion;
+import in.munimsaathi.inventory.Ownership;
 import in.munimsaathi.inventory.PostedOperation;
 import in.munimsaathi.inventory.PostedOperationRepository;
 import in.munimsaathi.inventory.SignedStockChange;
@@ -867,7 +868,8 @@ public class PostingService {
                 conversion.factorToBase(),
                 reason,
                 operationId,
-                occurredAt
+                occurredAt,
+                Ownership.BUSINESS
         );
     }
 }

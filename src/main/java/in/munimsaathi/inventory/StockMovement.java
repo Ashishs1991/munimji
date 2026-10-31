@@ -108,4 +108,12 @@ public class StockMovement {
     public UUID getBatchId() {
         return batchId;
     }
+
+    public UUID getLocationId() {
+        return locationId;
+    }
+
+    public Ownership getOwnership() {
+        return ownership;
+    }
 }

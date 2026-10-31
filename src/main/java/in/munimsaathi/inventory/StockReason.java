@@ -5,5 +5,6 @@ public enum StockReason {
     ADJUSTMENT,
     RECEIPT,
     SALE,
-    RETURN
+    RETURN,
+    TRANSFER
 }
