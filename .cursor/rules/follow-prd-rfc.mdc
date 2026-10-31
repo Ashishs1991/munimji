@@ -1,0 +1,12 @@
+---
+description: Follow the PRD and RFC, use TDD, and commit in small tested slices
+alwaysApply: true
+---
+
+# Spec and workflow
+
+Read and follow `doc/PRD.md` and `doc/RFC-001.md` for architecture, domain, and constraints. Those files are the source of truth. Do not invent scope or stack choices that contradict them.
+
+- Build in small, feature-level commits after a discrete unit is implemented and its tests pass. Do not batch unrelated work into one large commit. Push each feature commit. Commit messages must not mention Cursor.
+- Follow TDD: write the JUnit, Spring Boot Test, and Testcontainers tests for a module before implementing it, then run them to verify completion.
+- Database integration tests use PostgreSQL via Testcontainers. Do not treat H2 as a substitute.

@@ -1,16 +1,53 @@
-.DS_Store
+# Secrets and local configuration. Commit .env.example only.
 .env
 .env.*
 !.env.example
+*.pem
+*.key
+*.p12
+*.jks
+*.pfx
+credentials.json
+service-account*.json
+secrets/
+
+# Local overrides that may contain keys. application.yml stays committed
+# and must contain ${ENV_VAR} placeholders only.
+application-local.yml
+application-local.properties
+application-secret.yml
+
+# Java / Maven
+target/
+*.class
+*.war
+*.iml
+.idea/
+
+# Python leftovers from any local experiments
 .venv/
 __pycache__/
 *.py[cod]
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
+
+# Node leftovers
 node_modules/
 .next/
 dist/
 coverage/
+
+# Supabase local
+supabase/.temp/
+supabase/.branches/
+
+# Private business records and demo media
 private/
 *.log
+hs_err_pid*
+replay_pid*
+
+# OS
+.DS_Store
+Thumbs.db

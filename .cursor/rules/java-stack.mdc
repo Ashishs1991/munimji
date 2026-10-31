@@ -1,0 +1,24 @@
+---
+description: Java Spring Boot stack boundaries for Munim Saathi
+alwaysApply: true
+---
+
+# Tech stack
+
+One modular Java application. Do not add a separate frontend, SPA, Python service, microservice, Redis, or message broker.
+
+- API and logic: Spring Boot MVC, Java records, Jackson, Jakarta Bean Validation.
+- Database: Supabase PostgreSQL, Spring Data JPA, Flyway SQL migrations. Use native SQL where needed. Flyway owns schema changes; Hibernate validates and does not auto-update production schema.
+- Dashboard: Thymeleaf, Bootstrap, and modest JavaScript/CSS in the same application.
+- AI: call Meta vision, reasoning, and transcription endpoints with Spring RestClient. Do not use Spring AI or LangChain4j for the MVP.
+- Jobs: PostgreSQL jobs/outbox plus a Spring worker. `@Scheduled` only wakes the poller. Persist due times, leases, and outcomes in PostgreSQL.
+- Money is integer paise in `long`, with overflow checks. Quantities and fractional prices are `BigDecimal`. Never use `double` for stock or money.
+
+```java
+// Bad
+double total = 1000.50;
+
+// Good
+long totalPaise = 100_050L;
+BigDecimal quantity = new BigDecimal("2");
+```

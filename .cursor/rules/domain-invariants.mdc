@@ -1,0 +1,22 @@
+---
+description: Single-app modules and posting invariants from the RFC
+alwaysApply: true
+---
+
+# Architecture
+
+Keep ingestion, interpretation, inventory, ledger, imports, forecasting, and reminders as modules in one application.
+
+- Do not add a multi-agent framework, vector database, or generic plugin marketplace.
+- Models propose changes. Application code validates and calculates. Deserialize model JSON into records and validate schema, tenant, and domain rules before use. Model output never becomes a posted JPA entity directly, and a model cannot write a posted record or run arbitrary SQL.
+- The owner approves. A database transaction commits local effects. External actions run as later jobs. Unknown external outcomes are reconciled, not blindly retried.
+- Posted records are immutable. Corrections are linked reversals, adjustments, or credit records.
+
+```java
+// Bad: persist the model payload as the posted sale
+saleRepository.save(objectMapper.convertValue(modelJson, Sale.class));
+
+// Good: validate a draft, then post through the transactional service
+SaleDraft draft = draftValidator.validate(proposal, businessId);
+postingService.approveAndPost(draft, approval);
+```

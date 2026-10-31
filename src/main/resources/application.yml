@@ -1,0 +1,48 @@
+# Single configuration map for Munim Saathi.
+# Secrets live in .env (local) or the host environment (deployed).
+# This file must not contain API keys, passwords, or tokens.
+spring:
+  config:
+    import: optional:file:.env[.properties]
+  datasource:
+    url: ${DATABASE_URL:}
+    username: ${DATABASE_USERNAME:}
+    password: ${DATABASE_PASSWORD:}
+  jpa:
+    open-in-view: false
+    hibernate:
+      ddl-auto: validate
+
+server:
+  port: ${SERVER_PORT:8080}
+
+munim:
+  timezone: ${APP_TIMEZONE:Asia/Kolkata}
+  currency: ${APP_CURRENCY:INR}
+  meta:
+    api-key: ${META_API_KEY:}
+    base-url: ${META_API_BASE_URL:}
+    reasoning-model: ${META_REASONING_MODEL:muse-spark-1.3}
+    transcription-model: ${META_TRANSCRIPTION_MODEL:muse-voice-transcribe-1.0}
+  supabase:
+    url: ${SUPABASE_URL:}
+    anon-key: ${SUPABASE_ANON_KEY:}
+    service-role-key: ${SUPABASE_SERVICE_ROLE_KEY:}
+    jwt-secret: ${SUPABASE_JWT_SECRET:}
+    storage-bucket: ${SUPABASE_STORAGE_BUCKET:}
+  whatsapp:
+    access-token: ${WHATSAPP_ACCESS_TOKEN:}
+    app-secret: ${WHATSAPP_APP_SECRET:}
+    verify-token: ${WHATSAPP_VERIFY_TOKEN:}
+    phone-number-id: ${WHATSAPP_PHONE_NUMBER_ID:}
+    business-account-id: ${WHATSAPP_BUSINESS_ACCOUNT_ID:}
+    graph-api-version: ${WHATSAPP_GRAPH_API_VERSION:}
+  tally:
+    enabled: ${TALLY_ENABLED:false}
+    connector-token: ${TALLY_CONNECTOR_TOKEN:}
+  eway:
+    enabled: ${EWAY_ENABLED:false}
+    environment: ${EWAY_ENVIRONMENT:sandbox}
+    base-url: ${EWAY_BASE_URL:}
+    client-id: ${EWAY_CLIENT_ID:}
+    client-secret: ${EWAY_CLIENT_SECRET:}

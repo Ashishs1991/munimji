@@ -1,0 +1,16 @@
+---
+description: Ship one tested feature at a time, with an AGENTS.md, then push
+alwaysApply: true
+---
+
+# Feature delivery
+
+Build one milestone at a time, in the order in the root `AGENTS.md`. A milestone is one demoable slice, not a whole layer of the system.
+
+When a feature is finished and its tests pass:
+
+1. Add `doc/features/<feature-slug>/AGENTS.md` describing what was built, which PRD and RFC sections it covers, how to run its tests, and what is still open.
+2. Commit only that feature. The message names the feature. Do not mention Cursor, the editor, or the agent in the commit message.
+3. Push that commit to the configured remote.
+
+Do not batch unrelated features into one commit. Do not push secrets. Leave the next milestone unstarted until the current one is pushed.
