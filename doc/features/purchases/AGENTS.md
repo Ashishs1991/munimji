@@ -24,4 +24,4 @@ Docker must be running.
 
 ## Still open
 
-An approved bill does not yet raise a supplier payable. That is the next milestone.
+Approving a bill onto the supplier balance is covered by [supplier balances](../supplier-balances/AGENTS.md).

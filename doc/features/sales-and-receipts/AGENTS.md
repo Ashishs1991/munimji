@@ -24,4 +24,4 @@ Docker must be running.
 
 ## Still open
 
-Canceling a number does not reverse the sale. Supplier payables are the next milestone.
+Canceling a number does not reverse the sale. Supplier payables are kept separate in [supplier balances](../supplier-balances/AGENTS.md). Returns and corrections are the next milestone.

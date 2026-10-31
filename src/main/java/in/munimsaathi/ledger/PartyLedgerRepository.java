@@ -18,7 +18,22 @@ public interface PartyLedgerRepository extends JpaRepository<PartyLedgerEntry, U
             """)
     long receivablePaise(@Param("businessId") UUID businessId, @Param("partyId") UUID partyId);
 
+    @Query("""
+            select coalesce(sum(entry.signedPaise), 0)
+            from PartyLedgerEntry entry
+            where entry.businessId = :businessId
+              and entry.partyId = :partyId
+              and entry.accountSide = in.munimsaathi.ledger.AccountSide.PAYABLE
+            """)
+    long payablePaise(@Param("businessId") UUID businessId, @Param("partyId") UUID partyId);
+
     long countByPartyId(UUID partyId);
+
+    boolean existsBySourceDocumentIdAndAccountSideAndReason(
+            UUID sourceDocumentId,
+            AccountSide accountSide,
+            LedgerReason reason
+    );
 
     List<PartyLedgerEntry> findByBusinessIdAndPartyIdAndAccountSideAndReason(
             UUID businessId,

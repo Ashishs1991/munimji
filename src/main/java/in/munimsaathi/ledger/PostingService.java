@@ -334,6 +334,148 @@ public class PostingService {
         return unapplied;
     }
 
+    @Transactional
+    public void approveSupplierBill(UUID userId, UUID operationId, UUID billId, Instant occurredAt) {
+        UUID businessId = tenants.currentBusinessId(userId);
+        if (operationId == null) {
+            throw new IllegalArgumentException("An operation id is required.");
+        }
+        if (occurredAt == null) {
+            throw new IllegalArgumentException("A business date and a time are required.");
+        }
+        Optional<PostedOperation> existing = operations.findById(operationId);
+        if (existing.isPresent()) {
+            if (!"SUPPLIER_BILL_APPROVAL".equals(existing.get().getKind())) {
+                throw new IllegalArgumentException("This operation was already used.");
+            }
+            return;
+        }
+        PostedDocument bill = requireSupplierBill(businessId, billId);
+        if (ledger.existsBySourceDocumentIdAndAccountSideAndReason(bill.getId(), AccountSide.PAYABLE, LedgerReason.PURCHASE)) {
+            throw new IllegalArgumentException("This bill is already on the supplier balance.");
+        }
+        operations.saveAndFlush(new PostedOperation(operationId, businessId, "SUPPLIER_BILL_APPROVAL", userId));
+        ledger.save(new PartyLedgerEntry(
+                UUID.randomUUID(),
+                businessId,
+                bill.getPartyId(),
+                AccountSide.PAYABLE,
+                bill.getTotalPaise(),
+                LedgerReason.PURCHASE,
+                bill.getId(),
+                operationId,
+                occurredAt
+        ));
+    }
+
+    @Transactional
+    public UUID paySupplier(
+            UUID userId,
+            UUID operationId,
+            UUID supplierId,
+            UUID billId,
+            long amountPaise,
+            String paymentMethod,
+            LocalDate occurredOn,
+            Instant occurredAt
+    ) {
+        UUID businessId = tenants.currentBusinessId(userId);
+        Optional<UUID> prior = alreadyPosted(businessId, operationId);
+        if (prior.isPresent()) {
+            return prior.get();
+        }
+        requirePositive(amountPaise);
+        String method = requirePaymentMethod(paymentMethod);
+        requireParty(businessId, supplierId, PartyRole.SUPPLIER);
+        requireWhen(occurredOn, occurredAt);
+        if (amountPaise > ledger.payablePaise(businessId, supplierId)) {
+            throw new IllegalArgumentException("Payment is larger than the supplier balance.");
+        }
+        if (billId != null) {
+            PostedDocument bill = requireSupplierBill(businessId, billId);
+            if (!bill.getPartyId().equals(supplierId)) {
+                throw new IllegalArgumentException("Unknown bill.");
+            }
+            long outstanding = Paise.subtract(bill.getTotalPaise(), allocations.allocatedTo(bill.getId()));
+            if (amountPaise > outstanding) {
+                throw new IllegalArgumentException("Amount is larger than what is still owed on this bill.");
+            }
+        }
+        operations.saveAndFlush(new PostedOperation(operationId, businessId, "SUPPLIER_PAYMENT", userId));
+        PostedDocument payment = new PostedDocument(
+                UUID.randomUUID(),
+                businessId,
+                supplierId,
+                DocumentKind.SUPPLIER_PAYMENT,
+                occurredOn,
+                amountPaise,
+                operationId,
+                billId,
+                FinanceStatus.RECORDED
+        );
+        payment.recordPaymentMethod(method);
+        documents.saveAndFlush(payment);
+        PartyLedgerEntry entry = ledger.saveAndFlush(new PartyLedgerEntry(
+                UUID.randomUUID(),
+                businessId,
+                supplierId,
+                AccountSide.PAYABLE,
+                Math.negateExact(amountPaise),
+                LedgerReason.PAYMENT,
+                payment.getId(),
+                operationId,
+                occurredAt
+        ));
+        if (billId != null) {
+            allocations.save(new Allocation(
+                    UUID.randomUUID(),
+                    businessId,
+                    entry.getId(),
+                    billId,
+                    AccountSide.PAYABLE,
+                    amountPaise
+            ));
+        }
+        return payment.getId();
+    }
+
+    @Transactional(readOnly = true)
+    public long supplierPayablePaise(UUID userId, UUID partyId) {
+        UUID businessId = tenants.currentBusinessId(userId);
+        requireParty(businessId, partyId, PartyRole.SUPPLIER);
+        return ledger.payablePaise(businessId, partyId);
+    }
+
+    @Transactional(readOnly = true)
+    public long unappliedSupplierPaymentPaise(UUID userId, UUID partyId) {
+        UUID businessId = tenants.currentBusinessId(userId);
+        requireParty(businessId, partyId, PartyRole.SUPPLIER);
+        long unapplied = 0;
+        List<PartyLedgerEntry> payments = ledger.findByBusinessIdAndPartyIdAndAccountSideAndReason(
+                businessId,
+                partyId,
+                AccountSide.PAYABLE,
+                LedgerReason.PAYMENT
+        );
+        for (PartyLedgerEntry entry : payments) {
+            long paid = Math.negateExact(entry.getSignedPaise());
+            long applied = allocations.findBySourceEntryId(entry.getId()).map(Allocation::getAmountPaise).orElse(0L);
+            unapplied = Paise.add(unapplied, Paise.subtract(paid, applied));
+        }
+        return unapplied;
+    }
+
+    private PostedDocument requireSupplierBill(UUID businessId, UUID billId) {
+        PostedDocument bill = documents.findById(billId)
+                .orElseThrow(() -> new IllegalArgumentException("Unknown bill."));
+        if (!bill.getBusinessId().equals(businessId)
+                || bill.getKind() != DocumentKind.SUPPLIER_BILL
+                || bill.getTotalPaise() == null) {
+            throw new IllegalArgumentException("Unknown bill.");
+        }
+        return bill;
+    }
+
     private UUID postReceipt(
             UUID userId,
             UUID businessId,

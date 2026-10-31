@@ -3,5 +3,7 @@ package in.munimsaathi.ledger;
 public enum LedgerReason {
     SALE,
     RECEIPT,
-    CREDIT
+    CREDIT,
+    PURCHASE,
+    PAYMENT
 }
