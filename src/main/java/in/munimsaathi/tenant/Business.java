@@ -40,4 +40,8 @@ public class Business {
     public String getName() {
         return name;
     }
+
+    public String getTimezone() {
+        return timezone;
+    }
 }

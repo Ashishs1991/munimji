@@ -113,6 +113,10 @@ public class PostedDocument {
         return kind;
     }
 
+    public LocalDate getOccurredOn() {
+        return occurredOn;
+    }
+
     public Long getTotalPaise() {
         return totalPaise;
     }

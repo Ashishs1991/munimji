@@ -1,0 +1,176 @@
+<!DOCTYPE html>
+<html lang="en" xmlns:th="http://www.thymeleaf.org">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Munim Saathi</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
+</head>
+<body class="bg-light">
+<main class="container py-4">
+    <header class="d-flex flex-wrap justify-content-between align-items-center gap-3 mb-4">
+        <div>
+            <h1 class="h3 mb-1">Munim Saathi</h1>
+            <p class="mb-0" th:if="${overview.selectionRequired}">Select a business to see its records.</p>
+            <p class="mb-0" th:unless="${overview.selectionRequired}"
+               th:text="${overview.businessName} + ' on ' + ${overview.date}">Business on date</p>
+        </div>
+        <form th:if="${overview.businesses.size() > 1}" method="post" th:action="@{/dashboard/business}" class="d-flex gap-2">
+            <input type="hidden" name="userId" th:value="${userId}">
+            <input type="hidden" name="date" th:value="${overview.date}">
+            <label class="visually-hidden" for="businessId">Business</label>
+            <select id="businessId" name="businessId" class="form-select">
+                <option th:each="choice : ${overview.businesses}"
+                        th:value="${choice.id}"
+                        th:text="${choice.name}"
+                        th:selected="${choice.selected}"></option>
+            </select>
+            <button class="btn btn-outline-secondary" type="submit">Open</button>
+        </form>
+    </header>
+
+    <section th:if="${overview.selectionRequired}" class="alert alert-warning">
+        This owner belongs to more than one business. The figures stay hidden until one is selected.
+    </section>
+
+    <div th:unless="${overview.selectionRequired}">
+        <section class="row g-3 mb-4">
+            <article class="col-md-4">
+                <div class="card h-100">
+                    <div class="card-body">
+                        <h2 class="h6">Receivable</h2>
+                        <p class="fs-4 mb-1" th:text="${overview.receivableRupees()}">0.00</p>
+                        <p class="text-secondary mb-0">Customer balances through this date.</p>
+                    </div>
+                </div>
+            </article>
+            <article class="col-md-4">
+                <div class="card h-100">
+                    <div class="card-body">
+                        <h2 class="h6">Payable</h2>
+                        <p class="fs-4 mb-1" th:text="${overview.payableRupees()}">0.00</p>
+                        <p class="text-secondary mb-0">Supplier balances through this date. Not netted with receivables.</p>
+                    </div>
+                </div>
+            </article>
+            <article class="col-md-4">
+                <div class="card h-100">
+                    <div class="card-body">
+                        <h2 class="h6">Sales on this date</h2>
+                        <p class="fs-4 mb-1">
+                            <a th:if="${!overview.saleDocumentIds.empty}" href="#sales" th:text="${overview.salesRupees()}">0.00</a>
+                            <span th:if="${overview.saleDocumentIds.empty}" th:text="${overview.salesRupees()}">0.00</span>
+                        </p>
+                        <p class="mb-0">Returns <span th:text="${overview.returnRupees()}">0.00</span></p>
+                        <p class="mb-0">Receipts <span th:text="${overview.receiptRupees()}">0.00</span></p>
+                    </div>
+                </div>
+            </article>
+        </section>
+
+        <section class="card mb-4">
+            <div class="card-body">
+                <h2 class="h5">Stock by godown</h2>
+                <p th:if="${overview.stock.empty}" class="mb-0">No business-owned stock on this date.</p>
+                <table th:unless="${overview.stock.empty}" class="table mb-0">
+                    <thead>
+                    <tr>
+                        <th>Godown</th>
+                        <th>Product</th>
+                        <th>Pieces</th>
+                    </tr>
+                    </thead>
+                    <tbody>
+                    <tr th:each="row : ${overview.stock}">
+                        <td th:text="${row.godownName}">Godown</td>
+                        <td th:text="${row.productName}">Product</td>
+                        <td th:text="${row.quantityText}">0</td>
+                    </tr>
+                    </tbody>
+                </table>
+            </div>
+        </section>
+
+        <section class="card mb-4">
+            <div class="card-body">
+                <h2 class="h5">Unknown expiry</h2>
+                <p th:if="${overview.unknownExpiry.empty}" class="mb-0">No stock with an unknown expiry on this date.</p>
+                <ul th:unless="${overview.unknownExpiry.empty}" class="mb-0">
+                    <li th:each="name : ${overview.unknownExpiry}" th:text="${name}">Product</li>
+                </ul>
+            </div>
+        </section>
+
+        <section class="card mb-4" id="sales">
+            <div class="card-body">
+                <h2 class="h5">Supporting records</h2>
+                <p class="mb-1">Sales</p>
+                <ul>
+                    <li th:if="${overview.saleDocumentIds.empty}">No sale on this date.</li>
+                    <li th:each="id : ${overview.saleDocumentIds}" th:id="'doc-' + ${id}" th:text="${id}">id</li>
+                </ul>
+                <p class="mb-1">Returns</p>
+                <ul>
+                    <li th:if="${overview.returnDocumentIds.empty}">No return on this date.</li>
+                    <li th:each="id : ${overview.returnDocumentIds}" th:text="${id}">id</li>
+                </ul>
+                <p class="mb-1">Receipts</p>
+                <ul>
+                    <li th:if="${overview.receiptDocumentIds.empty}">No receipt on this date.</li>
+                    <li th:each="id : ${overview.receiptDocumentIds}" th:text="${id}">id</li>
+                </ul>
+            </div>
+        </section>
+
+        <section class="card mb-4">
+            <div class="card-body">
+                <h2 class="h5">Pending work</h2>
+                <ul class="mb-0">
+                    <li th:text="${overview.clarificationDrafts} + ' proposals need a missing field'">0 proposals need a missing field</li>
+                    <li th:text="${overview.awaitingApproval} + ' proposals are waiting for approval'">0 proposals are waiting for approval</li>
+                    <li th:text="${overview.financePending} + ' posted records still have finance pending'">0 posted records still have finance pending</li>
+                </ul>
+            </div>
+        </section>
+
+        <section class="card mb-4">
+            <div class="card-body">
+                <h2 class="h5">Low stock</h2>
+                <p>A threshold alert compares on-hand stock for this date with a quantity the owner set. It is not a forecast.</p>
+                <p th:if="${overview.lowStock.empty}" class="mb-3">No open threshold alert.</p>
+                <ul th:unless="${overview.lowStock.empty}">
+                    <li th:each="alert : ${overview.lowStock}"
+                        th:text="${alert.productName} + ' has ' + ${alert.observedText} + ' on hand. The owner threshold is ' + ${alert.thresholdText} + '. This is a threshold alert, not a forecast.'">
+                        Product
+                    </li>
+                </ul>
+                <form method="post" th:action="@{/dashboard/threshold}" class="row g-2 align-items-end">
+                    <input type="hidden" name="userId" th:value="${userId}">
+                    <input type="hidden" name="date" th:value="${overview.date}">
+                    <div class="col-md-5">
+                        <label class="form-label" for="productId">Product</label>
+                        <select id="productId" name="productId" class="form-select" required>
+                            <option th:each="row : ${overview.stock}" th:value="${row.productId}" th:text="${row.productName}"></option>
+                        </select>
+                    </div>
+                    <div class="col-md-4">
+                        <label class="form-label" for="minimum">Minimum pieces</label>
+                        <input id="minimum" name="minimum" class="form-control" inputmode="decimal" required>
+                    </div>
+                    <div class="col-md-3">
+                        <button class="btn btn-primary" type="submit">Save threshold</button>
+                    </div>
+                </form>
+            </div>
+        </section>
+
+        <section class="card">
+            <div class="card-body">
+                <h2 class="h5">Forecast</h2>
+                <p class="mb-0">No forecast is available.</p>
+            </div>
+        </section>
+    </div>
+</main>
+</body>
+</html>

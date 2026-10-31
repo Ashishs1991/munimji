@@ -109,6 +109,10 @@ public class StockMovement {
         return batchId;
     }
 
+    public UUID getProductId() {
+        return productId;
+    }
+
     public UUID getLocationId() {
         return locationId;
     }

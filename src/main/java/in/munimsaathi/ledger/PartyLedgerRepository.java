@@ -4,6 +4,7 @@ import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
+import java.time.Instant;
 import java.util.List;
 import java.util.UUID;
 
@@ -26,6 +27,19 @@ public interface PartyLedgerRepository extends JpaRepository<PartyLedgerEntry, U
               and entry.accountSide = in.munimsaathi.ledger.AccountSide.PAYABLE
             """)
     long payablePaise(@Param("businessId") UUID businessId, @Param("partyId") UUID partyId);
+
+    @Query("""
+            select coalesce(sum(entry.signedPaise), 0)
+            from PartyLedgerEntry entry
+            where entry.businessId = :businessId
+              and entry.accountSide = :side
+              and entry.effectiveAt < :until
+            """)
+    long summedPaise(
+            @Param("businessId") UUID businessId,
+            @Param("side") AccountSide side,
+            @Param("until") Instant until
+    );
 
     long countByPartyId(UUID partyId);
 
