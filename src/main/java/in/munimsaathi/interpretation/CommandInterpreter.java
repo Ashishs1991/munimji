@@ -77,6 +77,33 @@ public class CommandInterpreter {
         } catch (Exception exception) {
             throw new IllegalArgumentException("The model reply was not readable.", exception);
         }
+        return apply(userId, null, reply, occurredOn, occurredAt);
+    }
+
+    @Transactional
+    public InterpretationOutcome applyExtraction(
+            UUID userId,
+            UUID draftId,
+            String modelJson,
+            LocalDate occurredOn,
+            Instant occurredAt
+    ) {
+        JsonNode reply;
+        try {
+            reply = mapper.readTree(modelJson);
+        } catch (Exception exception) {
+            throw new IllegalArgumentException("The model reply was not readable.", exception);
+        }
+        return apply(userId, draftId, reply, occurredOn, occurredAt);
+    }
+
+    private InterpretationOutcome apply(
+            UUID userId,
+            UUID draftId,
+            JsonNode reply,
+            LocalDate occurredOn,
+            Instant occurredAt
+    ) {
         List<String> refused = refusedTools(reply);
         String intent = text(reply, "intent");
         String action = "sale".equalsIgnoreCase(intent) ? "sale" : null;
@@ -86,13 +113,13 @@ public class CommandInterpreter {
         BigDecimal quantity = quantity(reply.get("quantity"));
         String unit = text(reply, "unit");
         Long amount = amount(reply.get("amount_paise"));
-        if (action == null && customerId == null && productId == null && locationId == null
+        if (draftId == null && action == null && customerId == null && productId == null && locationId == null
                 && quantity == null && unit == null && amount == null) {
             return new InterpretationOutcome(null, refused);
         }
-        DraftProposal draft = drafts.propose(
-                userId, action, customerId, productId, locationId, quantity, unit, amount, occurredOn, occurredAt
-        );
+        DraftProposal draft = draftId == null
+                ? drafts.propose(userId, action, customerId, productId, locationId, quantity, unit, amount, occurredOn, occurredAt)
+                : drafts.edit(userId, draftId, action, customerId, productId, locationId, quantity, unit, amount, occurredOn, occurredAt);
         return new InterpretationOutcome(draft, refused);
     }
 
