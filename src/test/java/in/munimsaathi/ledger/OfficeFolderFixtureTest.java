@@ -114,7 +114,7 @@ class OfficeFolderFixtureTest {
 
         posting.acceptReturn(
                 shop.userId(), returned, shop.customerId(), saleId, shop.productId(), shop.godownId(),
-                new BigDecimal("2"), "piece", Paise.fromRupees(200), true, DAY, AT
+                new BigDecimal("2"), "piece", Paise.fromRupees(200), true, "resellable return", DAY, AT
         );
         assertBooks(shop, "62", Paise.fromRupees(400));
         assertThat(movements.findByOperationId(returned)).singleElement()
@@ -137,7 +137,7 @@ class OfficeFolderFixtureTest {
         posting.receivePayment(shop.userId(), payment, shop.customerId(), saleId, Paise.fromRupees(400), "cash", DAY, AT);
         posting.acceptReturn(
                 shop.userId(), returned, shop.customerId(), saleId, shop.productId(), shop.godownId(),
-                new BigDecimal("2"), "piece", Paise.fromRupees(200), true, DAY, AT
+                new BigDecimal("2"), "piece", Paise.fromRupees(200), true, "resellable return", DAY, AT
         );
 
         assertBooks(shop, "62", Paise.fromRupees(400));
@@ -169,7 +169,7 @@ class OfficeFolderFixtureTest {
 
         posting.acceptReturn(
                 shop.userId(), UUID.randomUUID(), shop.customerId(), saleId, shop.productId(), shop.godownId(),
-                new BigDecimal("2"), "piece", Paise.fromRupees(200), false, DAY, AT
+                new BigDecimal("2"), "piece", Paise.fromRupees(200), false, "damaged", DAY, AT
         );
 
         assertBooks(shop, "40", Paise.fromRupees(800));

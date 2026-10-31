@@ -39,6 +39,7 @@ public class PostingService {
     private final BillReviewRepository reviews;
     private final InvoiceCounterRepository invoiceCounters;
     private final InvoiceNumberRepository invoiceNumbers;
+    private final CorrectionRepository corrections;
     private final StockPosting stock;
 
     public PostingService(
@@ -54,6 +55,7 @@ public class PostingService {
             BillReviewRepository reviews,
             InvoiceCounterRepository invoiceCounters,
             InvoiceNumberRepository invoiceNumbers,
+            CorrectionRepository corrections,
             StockPosting stock
     ) {
         this.tenants = tenants;
@@ -68,6 +70,7 @@ public class PostingService {
         this.reviews = reviews;
         this.invoiceCounters = invoiceCounters;
         this.invoiceNumbers = invoiceNumbers;
+        this.corrections = corrections;
         this.stock = stock;
     }
 
@@ -533,6 +536,13 @@ public class PostingService {
         invoiceNumbers.save(new InvoiceNumber(UUID.randomUUID(), businessId, counter.issueNext(), documentId));
     }
 
+    private static String requireReason(String reason) {
+        if (reason == null || reason.isBlank()) {
+            throw new IllegalArgumentException("A correction needs a reason.");
+        }
+        return reason.trim();
+    }
+
     private static String requirePaymentMethod(String paymentMethod) {
         if (paymentMethod == null || paymentMethod.isBlank()) {
             throw new IllegalArgumentException("A payment method is required.");
@@ -552,6 +562,7 @@ public class PostingService {
             String unitLabel,
             long creditPaise,
             boolean restock,
+            String reason,
             LocalDate occurredOn,
             Instant occurredAt
     ) {
@@ -561,13 +572,17 @@ public class PostingService {
             return prior.get();
         }
         requirePositive(creditPaise);
+        String recordedReason = requireReason(reason);
         requireParty(businessId, customerId, PartyRole.CUSTOMER);
         requireGodown(businessId, locationId);
         requireWhen(occurredOn, occurredAt);
         PostedDocument sale = requireSale(businessId, customerId, saleDocumentId);
         QuantityConversion conversion = catalog.convert(userId, productId, displayQuantity, unitLabel);
         requireWithinSold(sale.getId(), productId, conversion.baseQuantity());
-        requireWithinOutstanding(sale, creditPaise);
+        long alreadyCredited = documents.linkedPaise(sale.getId(), DocumentKind.CREDIT);
+        if (creditPaise > Paise.subtract(sale.getTotalPaise(), alreadyCredited)) {
+            throw new IllegalArgumentException("Credit is larger than the sale.");
+        }
         operations.saveAndFlush(new PostedOperation(operationId, businessId, "RETURN", userId));
         PostedDocument document = documents.saveAndFlush(new PostedDocument(
                 UUID.randomUUID(),
@@ -612,7 +627,87 @@ public class PostingService {
                 AccountSide.RECEIVABLE,
                 creditPaise
         ));
+        corrections.save(new Correction(
+                UUID.randomUUID(),
+                businessId,
+                operationId,
+                sale.getId(),
+                document.getId(),
+                recordedReason,
+                userId
+        ));
         return document.getId();
+    }
+
+    @Transactional
+    public UUID refundCash(
+            UUID userId,
+            UUID operationId,
+            UUID customerId,
+            UUID creditDocumentId,
+            long amountPaise,
+            String reason,
+            LocalDate occurredOn,
+            Instant occurredAt
+    ) {
+        UUID businessId = tenants.currentBusinessId(userId);
+        Optional<UUID> prior = alreadyPosted(businessId, operationId);
+        if (prior.isPresent()) {
+            return prior.get();
+        }
+        requirePositive(amountPaise);
+        String recordedReason = requireReason(reason);
+        requireParty(businessId, customerId, PartyRole.CUSTOMER);
+        requireWhen(occurredOn, occurredAt);
+        PostedDocument credit = documents.findById(creditDocumentId)
+                .orElseThrow(() -> new IllegalArgumentException("Unknown credit."));
+        if (!credit.getBusinessId().equals(businessId)
+                || credit.getKind() != DocumentKind.CREDIT
+                || !customerId.equals(credit.getPartyId())
+                || credit.getTotalPaise() == null) {
+            throw new IllegalArgumentException("Unknown credit.");
+        }
+        long alreadyRefunded = documents.linkedPaise(credit.getId(), DocumentKind.REFUND);
+        if (amountPaise > Paise.subtract(credit.getTotalPaise(), alreadyRefunded)) {
+            throw new IllegalArgumentException("Refund is larger than the credit.");
+        }
+        long balance = ledger.receivablePaise(businessId, customerId);
+        if (balance >= 0 || amountPaise > Math.negateExact(balance)) {
+            throw new IllegalArgumentException("There is no credit balance to refund.");
+        }
+        operations.saveAndFlush(new PostedOperation(operationId, businessId, "REFUND", userId));
+        PostedDocument refund = documents.saveAndFlush(new PostedDocument(
+                UUID.randomUUID(),
+                businessId,
+                customerId,
+                DocumentKind.REFUND,
+                occurredOn,
+                amountPaise,
+                operationId,
+                credit.getId(),
+                FinanceStatus.RECORDED
+        ));
+        ledger.save(new PartyLedgerEntry(
+                UUID.randomUUID(),
+                businessId,
+                customerId,
+                AccountSide.RECEIVABLE,
+                amountPaise,
+                LedgerReason.REFUND,
+                refund.getId(),
+                operationId,
+                occurredAt
+        ));
+        corrections.save(new Correction(
+                UUID.randomUUID(),
+                businessId,
+                operationId,
+                credit.getId(),
+                refund.getId(),
+                recordedReason,
+                userId
+        ));
+        return refund.getId();
     }
 
     @Transactional(readOnly = true)

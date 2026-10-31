@@ -1,6 +1,8 @@
 package in.munimsaathi.ledger;
 
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Query;
+import org.springframework.data.repository.query.Param;
 
 import java.time.LocalDate;
 import java.util.Optional;
@@ -21,4 +23,11 @@ public interface PostedDocumentRepository extends JpaRepository<PostedDocument, 
     );
 
     long countByPartyIdAndKind(UUID partyId, DocumentKind kind);
+
+    @Query("""
+            select coalesce(sum(document.totalPaise), 0)
+            from PostedDocument document
+            where document.sourceDocumentId = :sourceId and document.kind = :kind
+            """)
+    long linkedPaise(@Param("sourceId") UUID sourceId, @Param("kind") DocumentKind kind);
 }

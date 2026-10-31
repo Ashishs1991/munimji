@@ -6,5 +6,6 @@ public enum DocumentKind {
     RECEIPT,
     CREDIT,
     SUPPLIER_BILL,
-    SUPPLIER_PAYMENT
+    SUPPLIER_PAYMENT,
+    REFUND
 }

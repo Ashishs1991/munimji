@@ -5,5 +5,6 @@ public enum LedgerReason {
     RECEIPT,
     CREDIT,
     PURCHASE,
-    PAYMENT
+    PAYMENT,
+    REFUND
 }
