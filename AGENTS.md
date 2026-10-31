@@ -28,7 +28,7 @@ Milestone 0 is done. Build the next undone milestone only. The books come before
 | # | Milestone | PRD | Done when |
 |---|---|---|---|
 | 0 | Public-repo config | — | Done. Secrets stay in `.env`. `application.yml` maps every key. |
-| 1 | Spring Boot shell | — | Maven Wrapper builds an app that starts, loads `.env`, and passes a health check. |
+| 1 | Spring Boot shell | — | Done. `./mvnw test` passes. The app loads `.env` and `/actuator/health` is UP. |
 | 2 | Businesses and godowns | F15 | Two businesses, memberships, and named godowns migrate on PostgreSQL. A shared owner must select the active business. Queries cannot read the other tenant. |
 | 3 | Catalog and parties | F01 | Products keep size, brand, and pack distinct. Approved aliases and box-to-piece conversions are stored. A party can be customer, supplier, or both, without merging lookalike names. |
 | 4 | Opening stock | F01 | A confirmed count sets stock once. Repeating the approval does not add quantity again. A recount is an adjustment. Unknown expiry stays unknown. |
@@ -62,3 +62,4 @@ Out of these milestones: video shelf counting, GST return filing, bank access, a
 ## Feature notes
 
 - [Public-repo config](doc/features/public-repo-config/AGENTS.md)
+- [Spring Boot shell](doc/features/spring-boot-shell/AGENTS.md)

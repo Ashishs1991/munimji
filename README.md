@@ -12,7 +12,7 @@ Working project name. Planning documents are specifications, not implemented fea
 
 Open this folder in Cursor and read the PRD and RFC before implementing. Begin with one verified receive → locate → sell → correct → remind workflow. The agreed MVP supports two isolated businesses. Tally and e-way bill integrations are optional add-ons.
 
-The documents specify a Java and Spring Boot application, PostgreSQL/Supabase, and a Thymeleaf dashboard. Settings and API keys are mapped in `src/main/resources/application.yml` and supplied from a local `.env` file. Copy `.env.example` to `.env` and fill in values there. The Spring Boot shell is the next milestone.
+The application is Java and Spring Boot, with PostgreSQL/Supabase and a Thymeleaf dashboard still to come. Settings and API keys are mapped in `src/main/resources/application.yml` and supplied from a local `.env` file. Copy `.env.example` to `.env` and fill in values there. Run `./mvnw test` to build and check the shell. The next milestone is businesses and godowns.
 
 ## Hackathon contribution record
 
