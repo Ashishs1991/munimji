@@ -38,7 +38,7 @@ Milestone 0 is done. Build the next undone milestone only. The books come before
 | 8 | Supplier balances | F06 | Done. Approved purchase bills raise payables. Receipt of goods alone does not invent a price. Partial supplier payments work. The same party’s receivable and payable are never netted automatically. |
 | 9 | Returns and corrections | F07 | Done. Posted rows stay immutable. A return restocks only when restock is approved. Credit is not a cash refund. The correction records reason and approver. |
 | 10 | Locations and transfers | F14 | Done. “Agarwal box” has an approved meaning. Godown 3 is remembered without creating a purchase. Receive 1 A and 5 G, sell 1 A and 3 G, transfer 1 G: A is 0, G is 1 and 1. Customer-owned stock is not sellable. |
-| 11 | Drafts and approval | F03 | Missing quantity, party, price, unit, or action is not invented. “Yes” approves only one current proposal. Edits invalidate the old approval. Nothing posts before approval. |
+| 11 | Drafts and approval | F03 | Done. Missing quantity, party, price, unit, or action is not invented. “Yes” approves only one current proposal. Edits invalidate the old approval. Nothing posts before approval. |
 | 12 | Dashboard and low stock | F08, F12 | Overview, stock by godown, money, and pending work match the database for the same date. Low-stock alerts use an owner threshold and do not pretend to be forecasts. |
 | 13 | Text interpretation | F02 | A Hindi or Hinglish command becomes a validated draft through the Meta client. Tests use a fake client. Instructions inside a bill cannot authorize a tool. |
 | 14 | Photos and documents | F02, F04 | A photo or PDF attaches to one open draft and preserves its source. Extraction proposes fields. The owner still approves before any stock or money changes. |
@@ -72,3 +72,4 @@ Out of these milestones: video shelf counting, GST return filing, bank access, a
 - [Supplier balances](doc/features/supplier-balances/AGENTS.md)
 - [Returns and corrections](doc/features/returns-and-corrections/AGENTS.md)
 - [Locations and transfers](doc/features/locations-and-transfers/AGENTS.md)
+- [Drafts and approval](doc/features/drafts-and-approval/AGENTS.md)

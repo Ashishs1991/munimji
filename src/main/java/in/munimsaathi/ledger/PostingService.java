@@ -247,6 +247,53 @@ public class PostingService {
     }
 
     @Transactional
+    public UUID dispatch(
+            UUID userId,
+            UUID operationId,
+            UUID customerId,
+            UUID productId,
+            UUID locationId,
+            BigDecimal displayQuantity,
+            String unitLabel,
+            LocalDate occurredOn,
+            Instant occurredAt
+    ) {
+        UUID businessId = tenants.currentBusinessId(userId);
+        Optional<UUID> prior = alreadyPosted(businessId, operationId);
+        if (prior.isPresent()) {
+            return prior.get();
+        }
+        requireParty(businessId, customerId, PartyRole.CUSTOMER);
+        requireGodown(businessId, locationId);
+        requireWhen(occurredOn, occurredAt);
+        QuantityConversion conversion = catalog.convert(userId, productId, displayQuantity, unitLabel);
+        operations.saveAndFlush(new PostedOperation(operationId, businessId, "DISPATCH", userId));
+        PostedDocument document = documents.saveAndFlush(new PostedDocument(
+                UUID.randomUUID(),
+                businessId,
+                customerId,
+                DocumentKind.SALE,
+                occurredOn,
+                null,
+                operationId,
+                null,
+                FinanceStatus.PENDING
+        ));
+        lines.save(line(document.getId(), productId, locationId, conversion, null, false));
+        stock.add(change(
+                businessId,
+                productId,
+                locationId,
+                conversion,
+                conversion.baseQuantity().negate(),
+                StockReason.SALE,
+                operationId,
+                occurredAt
+        ));
+        return document.getId();
+    }
+
+    @Transactional
     public UUID receivePayment(
             UUID userId,
             UUID operationId,
