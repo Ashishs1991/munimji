@@ -48,7 +48,7 @@ Milestone 0 is done. Build the next undone milestone only. The books come before
 | 18 | Forecasts | F13 | Done. A 7-day baseline runs only on eligible covered sales. Thin history returns insufficient history. Opening stock, transfers, and purchases are not treated as demand. Reorder suggestions stop when lead time or inbound stock is unknown. |
 | 19 | Historical import | F16 | Done. One supported export stages, maps, and reconciles. Activation posts the opening snapshot once. Reimporting the same file changes nothing. History is not replayed into live stock. |
 | 20 | WhatsApp ingress | F02 | Done. A signed webhook is stored and acknowledged before any model call. Unknown senders are rejected. Duplicate events do not create a second draft. |
-| 21 | Two-tenant demo path | F15 | Receive, locate, sell, correct, and remind run in both businesses. Identically named Agarwal parties do not leak. The demo path matches the recorded expected stock and balances. |
+| 21 | Two-tenant demo path | F15 | Done. Receive, locate, sell, correct, and remind run in both businesses. Identically named Agarwal parties do not leak. The demo path matches the recorded expected stock and balances. |
 
 Optional, only after milestone 21 is pushed:
 
@@ -82,3 +82,4 @@ Out of these milestones: video shelf counting, GST return filing, bank access, a
 - [Forecasts](doc/features/forecasts/AGENTS.md)
 - [Historical import](doc/features/historical-import/AGENTS.md)
 - [WhatsApp ingress](doc/features/whatsapp-ingress/AGENTS.md)
+- [Two-tenant demo](doc/features/two-tenant-demo/AGENTS.md)
