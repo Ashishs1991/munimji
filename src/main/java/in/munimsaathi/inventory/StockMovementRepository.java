@@ -51,4 +51,23 @@ public interface StockMovementRepository extends JpaRepository<StockMovement, UU
             UUID productId,
             Ownership ownership
     );
+
+    @Query("""
+            select movement from StockMovement movement
+            where movement.businessId = :businessId
+              and movement.productId = :productId
+              and movement.ownership = in.munimsaathi.inventory.Ownership.BUSINESS
+              and movement.occurredAt >= :from
+              and movement.occurredAt < :until
+              and movement.reason in (
+                in.munimsaathi.inventory.StockReason.SALE,
+                in.munimsaathi.inventory.StockReason.RETURN
+              )
+            """)
+    List<StockMovement> salesAndReturnsBetween(
+            @Param("businessId") UUID businessId,
+            @Param("productId") UUID productId,
+            @Param("from") Instant from,
+            @Param("until") Instant until
+    );
 }

@@ -45,7 +45,7 @@ Milestone 0 is done. Build the next undone milestone only. The books come before
 | 15 | Voice receipts | F02, F14 | Done. A voice note is transcribed and becomes one atomic multi-item draft. Unresolved lines are not dropped. “Five boxes” does not become five pieces without a confirmed conversion. |
 | 16 | Durable jobs | F10 | Done. PostgreSQL stores due work, leases, and outcomes. `@Scheduled` only wakes the poller. A restart does not claim the same live lease twice. |
 | 17 | Reminders and sends | F10 | Done. Owner reminders and customer sends are different tasks. Full payment suppresses the send. A changed balance needs a new approval. Cancellation wins before dispatch. One consenting test send is recorded with its real provider status. |
-| 18 | Forecasts | F13 | A 7-day baseline runs only on eligible covered sales. Thin history returns insufficient history. Opening stock, transfers, and purchases are not treated as demand. Reorder suggestions stop when lead time or inbound stock is unknown. |
+| 18 | Forecasts | F13 | Done. A 7-day baseline runs only on eligible covered sales. Thin history returns insufficient history. Opening stock, transfers, and purchases are not treated as demand. Reorder suggestions stop when lead time or inbound stock is unknown. |
 | 19 | Historical import | F16 | One supported export stages, maps, and reconciles. Activation posts the opening snapshot once. Reimporting the same file changes nothing. History is not replayed into live stock. |
 | 20 | WhatsApp ingress | F02 | A signed webhook is stored and acknowledged before any model call. Unknown senders are rejected. Duplicate events do not create a second draft. |
 | 21 | Two-tenant demo path | F15 | Receive, locate, sell, correct, and remind run in both businesses. Identically named Agarwal parties do not leak. The demo path matches the recorded expected stock and balances. |
@@ -79,3 +79,4 @@ Out of these milestones: video shelf counting, GST return filing, bank access, a
 - [Voice receipts](doc/features/voice-receipts/AGENTS.md)
 - [Durable jobs](doc/features/durable-jobs/AGENTS.md)
 - [Reminders and sends](doc/features/reminders-and-sends/AGENTS.md)
+- [Forecasts](doc/features/forecasts/AGENTS.md)
