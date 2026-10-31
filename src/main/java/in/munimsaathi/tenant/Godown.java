@@ -37,6 +37,14 @@ public class Godown {
         this.active = true;
     }
 
+    public UUID getId() {
+        return id;
+    }
+
+    public UUID getBusinessId() {
+        return businessId;
+    }
+
     public String getCode() {
         return code;
     }

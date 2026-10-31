@@ -90,6 +90,11 @@ public class CatalogService {
 
     @Transactional(readOnly = true)
     public BigDecimal toBaseQuantity(UUID userId, UUID productId, BigDecimal displayQuantity, String unitLabel) {
+        return convert(userId, productId, displayQuantity, unitLabel).baseQuantity();
+    }
+
+    @Transactional(readOnly = true)
+    public QuantityConversion convert(UUID userId, UUID productId, BigDecimal displayQuantity, String unitLabel) {
         UUID businessId = tenants.currentBusinessId(userId);
         Product product = requireProduct(businessId, productId);
         if (displayQuantity == null) {
@@ -101,7 +106,7 @@ public class CatalogService {
         if (!product.isBaseUnitDivisible() && !isWhole(base)) {
             throw new IndivisibleQuantityException();
         }
-        return base;
+        return new QuantityConversion(displayQuantity, unit.getUnitLabel(), unit.getFactorToBase(), base);
     }
 
     @Transactional(readOnly = true)
