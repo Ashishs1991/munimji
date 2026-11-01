@@ -12,5 +12,7 @@ public interface InboundMessageRepository extends JpaRepository<InboundMessage, 
 
     List<InboundMessage> findByStatusAndDraftIdIsNull(InboundStatus status);
 
+    List<InboundMessage> findByStatus(InboundStatus status);
+
     long countByMessageId(String messageId);
 }

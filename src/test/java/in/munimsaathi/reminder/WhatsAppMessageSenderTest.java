@@ -56,7 +56,7 @@ class WhatsAppMessageSenderTest {
                 "INR",
                 null,
                 null,
-                new MunimProperties.Whatsapp(token, "", "", "phone-1", "", "v20.0"),
+                new MunimProperties.Whatsapp(token, "", "", "phone-1", "", "v20.0", false, "", ""),
                 null,
                 null,
                 new MunimProperties.Reminders(15)

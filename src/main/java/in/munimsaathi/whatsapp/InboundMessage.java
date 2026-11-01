@@ -63,6 +63,10 @@ public class InboundMessage {
         this.draftId = draftId;
     }
 
+    public void markReplied() {
+        this.status = InboundStatus.REPLIED;
+    }
+
     public UUID getId() {
         return id;
     }
@@ -73,6 +77,10 @@ public class InboundMessage {
 
     public String getMessageId() {
         return messageId;
+    }
+
+    public String getPhone() {
+        return phone;
     }
 
     public String getBody() {

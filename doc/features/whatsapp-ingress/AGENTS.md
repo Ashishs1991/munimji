@@ -10,6 +10,7 @@ Milestone 20. A signed webhook is stored and acknowledged before any model call.
 - An unknown phone is stored as rejected. Sending the same message id again does not add a row.
 - A delivery status is stored as a status callback and is not turned into a command.
 - Opening drafts from stored messages creates one draft per message. Running it again keeps that draft.
+- With `WHATSAPP_AUTO_REPLY=true`, a stored text message is answered in the WhatsApp session window after the webhook has already returned. `Yes` posts only the one current draft. A phone in `WHATSAPP_OWNER_PHONE` is registered to one new business on an empty database. That startup does not add stock.
 
 ## Spec
 
@@ -20,7 +21,7 @@ Milestone 20. A signed webhook is stored and acknowledged before any model call.
 Docker must be running.
 
 ```bash
-./mvnw -Dtest=WhatsAppIngressTest test
+./mvnw -Dtest=WhatsAppIngressTest,WhatsAppTurnTest,WhatsAppSessionClientTest test
 ```
 
 ## Still open

@@ -1,0 +1,8 @@
+.env
+target
+.git
+.mvn
+.idea
+*.md
+doc
+src/test

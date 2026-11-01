@@ -25,7 +25,10 @@ public record MunimProperties(
             String verifyToken,
             String phoneNumberId,
             String businessAccountId,
-            String graphApiVersion
+            String graphApiVersion,
+            boolean autoReply,
+            String ownerPhone,
+            String ownerBusiness
     ) {
     }
 
