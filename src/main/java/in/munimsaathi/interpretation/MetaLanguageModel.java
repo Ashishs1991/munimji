@@ -3,6 +3,8 @@ package in.munimsaathi.interpretation;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import in.munimsaathi.config.MunimProperties;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.http.MediaType;
 import org.springframework.stereotype.Component;
 import org.springframework.web.client.RestClient;
@@ -14,6 +16,8 @@ import java.util.Map;
 
 @Component
 public class MetaLanguageModel implements LanguageModel {
+
+    private static final Logger log = LoggerFactory.getLogger(MetaLanguageModel.class);
 
     static final String INSTRUCTIONS = """
             Return one JSON object with keys intent, party_name, product_name, quantity, unit, amount_paise, location_code, reminder_date, reminder_time, lines, and requested_tools.
@@ -59,15 +63,19 @@ public class MetaLanguageModel implements LanguageModel {
     private String post(Object userContent) {
         String apiKey = properties.meta().apiKey();
         String baseUrl = properties.meta().baseUrl();
+
         if (apiKey == null || apiKey.isBlank() || baseUrl == null || baseUrl.isBlank()) {
             throw new IllegalStateException("Meta API key is not configured.");
         }
+        String model = configuredModel(properties.meta().reasoningModel());
+        String endpoint = trimSlash(baseUrl) + "/chat/completions";
+        log.info("Meta chat request baseUrl={} endpoint={} model={}", baseUrl, endpoint, model);
         String body = client.post()
-                .uri(trimSlash(baseUrl) + "/chat/completions")
+                .uri(endpoint)
                 .header("Authorization", "Bearer " + apiKey)
                 .contentType(MediaType.APPLICATION_JSON)
                 .body(Map.of(
-                        "model", properties.meta().reasoningModel(),
+                        "model", model,
                         "messages", List.of(
                                 Map.of("role", "system", "content", INSTRUCTIONS),
                                 Map.of("role", "user", "content", userContent)
@@ -111,6 +119,13 @@ public class MetaLanguageModel implements LanguageModel {
             text.append(piece);
         }
         return text.toString();
+    }
+
+    private static String configuredModel(String model) {
+        if (model == null || model.isBlank()) {
+            return "muse-spark-1.3";
+        }
+        return model.trim();
     }
 
     private static String trimSlash(String baseUrl) {

@@ -88,6 +88,25 @@ class MetaLanguageModelTest {
     }
 
     @Test
+    void aBlankModelIsSentAsTheDefault() {
+        RestClient.Builder builder = RestClient.builder();
+        MockRestServiceServer server = MockRestServiceServer.bindTo(builder).build();
+        server.expect(requestTo("https://meta.example/chat/completions"))
+                .andExpect(content().string(org.hamcrest.Matchers.containsString("\"model\":\"muse-spark-1.3\"")))
+                .andRespond(withSuccess("""
+                        {"choices":[{"message":{"content":"Namaste"}}]}
+                        """, MediaType.APPLICATION_JSON));
+        MetaLanguageModel model = new MetaLanguageModel(
+                new MunimProperties("Asia/Kolkata", "INR", new MunimProperties.Meta("test-key", "https://meta.example", "  ", "muse-voice-transcribe-1.0"), null, null, null, null, null),
+                builder,
+                new ObjectMapper()
+        );
+
+        assertThat(model.complete("Hi")).isEqualTo("Namaste");
+        server.verify();
+    }
+
+    @Test
     void aMissingKeyDoesNotCallTheModel() {
         MetaLanguageModel model = new MetaLanguageModel(
                 new MunimProperties("Asia/Kolkata", "INR", new MunimProperties.Meta("", "", "muse-spark-1.3", "muse-voice-transcribe-1.0"), null, null, null, null, null),
