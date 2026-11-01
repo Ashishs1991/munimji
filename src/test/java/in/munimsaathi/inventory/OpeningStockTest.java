@@ -141,6 +141,17 @@ class OpeningStockTest {
         assertThat(counts.balance(shop.userId(), shop.productId(), shop.godownId())).isEqualByComparingTo("50");
     }
 
+    @Test
+    void aRecountToZeroEmptiesTheShelf() {
+        Shop shop = shop();
+        confirmBoxes(shop, UUID.randomUUID(), new BigDecimal("5"));
+        UUID recountSession = counts.start(shop.userId(), shop.godownId(), COUNTED_AT.plusSeconds(3600), "empty shelf");
+        counts.propose(shop.userId(), recountSession, shop.productId(), BigDecimal.ZERO, "box", null);
+        counts.confirm(shop.userId(), recountSession, UUID.randomUUID());
+
+        assertThat(counts.balance(shop.userId(), shop.productId(), shop.godownId())).isEqualByComparingTo("0");
+    }
+
     private void confirmBoxes(Shop shop, UUID operationId, BigDecimal boxes) {
         UUID sessionId = counts.start(shop.userId(), shop.godownId(), COUNTED_AT, "shelf A");
         counts.propose(shop.userId(), sessionId, shop.productId(), boxes, "box", null);

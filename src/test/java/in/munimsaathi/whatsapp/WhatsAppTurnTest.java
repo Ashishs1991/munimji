@@ -222,6 +222,31 @@ class WhatsAppTurnTest {
         verify(session, never()).sendText(eq(phone), eq("Send the instruction as text."));
     }
 
+    @Test
+    void aBlockedVoiceReplyDoesNotCreateASecondDraft() {
+        String phone = "919800000117";
+        UUID userId = owner();
+        ingress.allow(userId, phone);
+        String json = """
+                {"entry":[{"changes":[{"value":{"messages":[{"id":"wamid.voice-retry","from":"%s","type":"audio","audio":{"id":"media-2","mime_type":"audio/ogg"}}]}}]}]}
+                """.formatted(phone);
+        ingress.receive(sign(json.getBytes(StandardCharsets.UTF_8)), json.getBytes(StandardCharsets.UTF_8));
+        when(session.download("media-2")).thenReturn(new byte[] {4, 5, 6});
+        when(transcriber.transcribe(any(), eq("audio/ogg"))).thenReturn("ek box");
+        when(model.complete("ek box")).thenReturn("""
+                {"intent":"sale","quantity":"1","unit":"box","requested_tools":[]}
+                """);
+        when(session.sendText(eq(phone), anyString())).thenReturn(new ProviderReceipt("blocked", null));
+
+        turn.openStored();
+        turn.openStored();
+
+        verify(transcriber, times(1)).transcribe(any(), eq("audio/ogg"));
+        UUID businessId = memberships.findByAuthUserId(userId).get(0).getBusinessId();
+        assertThat(draftRows.findAll().stream().filter(draft -> businessId.equals(draft.getBusinessId())).toList()).hasSize(1);
+        assertThat(messages.findByMessageId("wamid.voice-retry").orElseThrow().getStatus()).isEqualTo(InboundStatus.STORED);
+    }
+
     private Shelf shelf(String phone) {
         UUID userId = owner();
         ingress.allow(userId, phone);

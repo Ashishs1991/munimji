@@ -68,6 +68,9 @@ class DraftApprovalTest {
     private DraftBook drafts;
 
     @Autowired
+    private DraftLineRepository draftLines;
+
+    @Autowired
     private PostingService posting;
 
     @Autowired
@@ -202,6 +205,59 @@ class DraftApprovalTest {
         drafts.approve(shop.userId(), edited.id(), edited.version(), edited.contentHash());
 
         assertThat(counts.balance(shop.userId(), shop.productId(), shop.godownId())).isEqualByComparingTo("30");
+    }
+
+    @Test
+    void aReceiptDraftPostsTheReceivedQuantity() {
+        Shop shop = shop();
+        UUID supplierId = parties.create(shop.userId(), "Gupta", PartyRole.SUPPLIER).getId();
+        DraftProposal draft = drafts.propose(
+                shop.userId(), "receive", supplierId, shop.productId(), shop.godownId(),
+                new BigDecimal("5"), "box", null, DAY, AT
+        );
+
+        drafts.approve(shop.userId(), draft.id(), draft.version(), draft.contentHash());
+
+        assertThat(counts.balance(shop.userId(), shop.productId(), shop.godownId())).isEqualByComparingTo("50");
+    }
+
+    @Test
+    void editingOneLineKeepsTheOther() {
+        Shop shop = shop();
+        openBoxes(shop, new BigDecimal("5"));
+        Product tape = catalog.registerProduct(
+                shop.userId(), "TAPE-" + shop.userId().toString().substring(0, 8), "Tape", null, null, "piece", false
+        );
+        catalog.approveUnit(shop.userId(), tape.getId(), "box", new BigDecimal("10"));
+        UUID tapeSession = counts.start(shop.userId(), shop.godownId(), AT, "tape");
+        counts.propose(shop.userId(), tapeSession, tape.getId(), new BigDecimal("5"), "box", null);
+        counts.confirm(shop.userId(), tapeSession, UUID.randomUUID());
+        DraftProposal draft = drafts.proposeLines(
+                shop.userId(),
+                "sale",
+                shop.customerId(),
+                shop.godownId(),
+                List.of(
+                        new DraftLineSpec(shop.productId(), BigDecimal.ONE, "box", Paise.fromRupees(100), null),
+                        new DraftLineSpec(tape.getId(), BigDecimal.ONE, "box", Paise.fromRupees(50), null)
+                ),
+                DAY,
+                AT
+        );
+        assertThatThrownBy(() -> drafts.edit(
+                shop.userId(), draft.id(), "sale", shop.customerId(), tape.getId(), shop.godownId(),
+                new BigDecimal("3"), "box", Paise.fromRupees(50), DAY, AT
+        )).isInstanceOf(IllegalArgumentException.class).hasMessage("Which line should change?");
+
+        DraftProposal edited = drafts.continueDraft(
+                shop.userId(), draft.id(), "sale", null, tape.getId(), null,
+                new BigDecimal("3"), "box", Paise.fromRupees(50), DAY, AT
+        );
+        drafts.approve(shop.userId(), edited.id(), edited.version(), edited.contentHash());
+
+        assertThat(draftLines.findByDraftIdOrderByLineNumberAsc(draft.id())).hasSize(2);
+        assertThat(counts.balance(shop.userId(), shop.productId(), shop.godownId())).isEqualByComparingTo("40");
+        assertThat(counts.balance(shop.userId(), tape.getId(), shop.godownId())).isEqualByComparingTo("20");
     }
 
     private DraftProposal sale(Shop shop, BigDecimal boxes, Long amountPaise) {

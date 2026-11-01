@@ -161,6 +161,9 @@ public class DraftBook {
         if (draft.getStatus() == DraftStatus.POSTED) {
             throw new IllegalArgumentException("A posted proposal cannot be edited.");
         }
+        if (draftLines.findByDraftIdOrderByLineNumberAsc(draft.getId()).size() > 1) {
+            throw new IllegalArgumentException("Which line should change?");
+        }
         fill(draft, action, customerId, productId, locationId, quantity, unit, amountPaise, occurredOn, occurredAt);
         rewriteLines(draft);
         return view(draft);
@@ -186,6 +189,24 @@ public class DraftBook {
         }
         List<DraftLine> existing = draftLines.findByDraftIdOrderByLineNumberAsc(draft.getId());
         boolean lineChange = productId != null || quantity != null || unit != null || amountPaise != null;
+        if (existing.size() > 1) {
+            if (lineChange) {
+                List<DraftLine> matches = existing.stream()
+                        .filter(line -> productId != null && productId.equals(line.getProductId()))
+                        .toList();
+                if (matches.size() != 1) {
+                    throw new IllegalArgumentException("Which line should change?");
+                }
+                DraftLine line = matches.get(0);
+                BigDecimal nextQuantity = quantity != null ? quantity : line.getDisplayQuantity();
+                String nextUnit = unit != null ? unit : line.getUnitLabel();
+                Long nextAmount = amountPaise != null ? amountPaise : line.getAmountPaise();
+                String unresolved = nextQuantity == null ? "quantity" : nextUnit == null ? "unit" : null;
+                line.replace(line.getProductId(), nextQuantity, nextUnit, nextAmount, unresolved);
+            }
+            keepLines(draft, action, customerId, locationId, occurredOn, occurredAt);
+            return view(draft);
+        }
         if (!existing.isEmpty()) {
             if (lineChange && existing.size() == 1) {
                 DraftLine line = existing.get(0);
@@ -270,6 +291,46 @@ public class DraftBook {
                 String.join(",", missing),
                 Instant.now().plus(2, ChronoUnit.HOURS)
         );
+    }
+
+    @Transactional
+    public DraftProposal replaceLines(
+            UUID userId,
+            UUID draftId,
+            String action,
+            UUID customerId,
+            UUID locationId,
+            List<DraftLineSpec> lines,
+            LocalDate occurredOn,
+            Instant occurredAt
+    ) {
+        if (lines == null || lines.isEmpty()) {
+            throw new IllegalArgumentException("A voice receipt needs every line, including unresolved ones.");
+        }
+        Draft draft = requireDraft(tenants.currentBusinessId(userId), draftId);
+        if (draft.getStatus() == DraftStatus.POSTED) {
+            throw new IllegalArgumentException("A posted proposal cannot be edited.");
+        }
+        List<DraftLine> existing = draftLines.findByDraftIdOrderByLineNumberAsc(draft.getId());
+        if (!existing.isEmpty()) {
+            draftLines.deleteAll(existing);
+            draftLines.flush();
+        }
+        for (int index = 0; index < lines.size(); index++) {
+            DraftLineSpec line = lines.get(index);
+            draftLines.save(new DraftLine(
+                    UUID.randomUUID(),
+                    draft.getId(),
+                    index + 1,
+                    line.productId(),
+                    line.displayQuantity(),
+                    line.unitLabel(),
+                    line.amountPaise(),
+                    line.unresolved()
+            ));
+        }
+        keepLines(draft, action, customerId, locationId, occurredOn, occurredAt);
+        return view(draft);
     }
 
     @Transactional(readOnly = true)

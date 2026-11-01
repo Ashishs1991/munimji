@@ -8,6 +8,7 @@ import in.munimsaathi.catalog.PartyBook;
 import in.munimsaathi.catalog.PartyRole;
 import in.munimsaathi.catalog.Product;
 import in.munimsaathi.draft.DraftBook;
+import in.munimsaathi.draft.DraftLineSpec;
 import in.munimsaathi.draft.DraftProposal;
 import in.munimsaathi.eway.EwayBook;
 import in.munimsaathi.eway.EwayDetails;
@@ -148,6 +149,17 @@ public class CommandInterpreter {
         BigDecimal quantity = quantity(reply.get("quantity"));
         String unit = text(reply, "unit");
         Long amount = amount(reply.get("amount_paise"));
+        JsonNode lineNodes = reply.get("lines");
+        if (lineNodes != null && lineNodes.isArray() && !lineNodes.isEmpty()) {
+            List<DraftLineSpec> specs = new ArrayList<>();
+            for (JsonNode node : lineNodes) {
+                specs.add(lineSpec(userId, node));
+            }
+            DraftProposal draft = draftId == null
+                    ? drafts.proposeLines(userId, action, customerId, locationId, specs, occurredOn, occurredAt)
+                    : drafts.replaceLines(userId, draftId, action, customerId, locationId, specs, occurredOn, occurredAt);
+            return new InterpretationOutcome(draft, refused, ewayDraftId, null);
+        }
         String answer = answerFor(userId, normalized, customerId, productId, reply);
         if (answer != null) {
             return new InterpretationOutcome(null, refused, ewayDraftId, answer);
@@ -208,6 +220,24 @@ public class CommandInterpreter {
             return "Reminder " + taskId + " is waiting for approval. It is not sent yet.";
         }
         return null;
+    }
+
+    private DraftLineSpec lineSpec(UUID userId, JsonNode node) {
+        UUID productId = product(userId, text(node, "product_name"));
+        BigDecimal lineQuantity = quantity(node.get("quantity"));
+        String unit = text(node, "unit");
+        Long lineAmount = amount(node.get("amount_paise"));
+        String unresolved = null;
+        if (productId == null) {
+            unresolved = "product";
+        } else if (lineQuantity == null || lineQuantity.signum() <= 0) {
+            unresolved = "quantity";
+        } else if (unit == null) {
+            unresolved = "unit";
+        } else if (!catalog.canConvert(userId, productId, lineQuantity, unit)) {
+            unresolved = "unit";
+        }
+        return new DraftLineSpec(productId, lineQuantity, unit, lineAmount, unresolved);
     }
 
     private List<String> refusedTools(JsonNode reply) {

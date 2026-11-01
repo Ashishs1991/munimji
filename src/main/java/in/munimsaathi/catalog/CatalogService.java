@@ -95,10 +95,27 @@ public class CatalogService {
 
     @Transactional(readOnly = true)
     public QuantityConversion convert(UUID userId, UUID productId, BigDecimal displayQuantity, String unitLabel) {
+        return convert(userId, productId, displayQuantity, unitLabel, false);
+    }
+
+    @Transactional(readOnly = true)
+    public QuantityConversion convertCount(UUID userId, UUID productId, BigDecimal displayQuantity, String unitLabel) {
+        return convert(userId, productId, displayQuantity, unitLabel, true);
+    }
+
+    private QuantityConversion convert(
+            UUID userId,
+            UUID productId,
+            BigDecimal displayQuantity,
+            String unitLabel,
+            boolean count
+    ) {
         UUID businessId = tenants.currentBusinessId(userId);
         Product product = requireProduct(businessId, productId);
-        if (displayQuantity == null || displayQuantity.signum() <= 0) {
-            throw new IllegalArgumentException("Quantity must be greater than zero.");
+        if (displayQuantity == null || displayQuantity.signum() < 0 || (!count && displayQuantity.signum() == 0)) {
+            throw new IllegalArgumentException(count
+                    ? "A counted quantity cannot be negative."
+                    : "Quantity must be greater than zero.");
         }
         ProductUnit unit = units.findByProductIdAndUnitLabel(product.getId(), Names.normalize(unitLabel))
                 .orElseThrow(() -> new UnknownUnitException(unitLabel));
@@ -107,6 +124,16 @@ public class CatalogService {
             throw new IndivisibleQuantityException();
         }
         return new QuantityConversion(displayQuantity, unit.getUnitLabel(), unit.getFactorToBase(), base);
+    }
+
+    @Transactional(readOnly = true)
+    public boolean canConvert(UUID userId, UUID productId, BigDecimal displayQuantity, String unitLabel) {
+        try {
+            convert(userId, productId, displayQuantity, unitLabel, false);
+            return true;
+        } catch (RuntimeException exception) {
+            return false;
+        }
     }
 
     @Transactional(readOnly = true)

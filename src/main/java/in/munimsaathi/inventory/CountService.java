@@ -67,7 +67,7 @@ public class CountService {
         if (lines.existsBySessionIdAndProductId(sessionId, productId)) {
             throw new IllegalArgumentException("This product is already on the count.");
         }
-        catalog.convert(userId, productId, displayQuantity, unitLabel);
+        catalog.convertCount(userId, productId, displayQuantity, unitLabel);
         long baseline = baselineVersion(businessId, productId, session.getLocationId(), expiryDate);
         lines.save(new CountLine(
                 UUID.randomUUID(),
@@ -117,7 +117,7 @@ public class CountService {
                 batchId = batch.getId();
                 line.attachBatch(batchId);
             }
-            QuantityConversion conversion = catalog.convert(
+            QuantityConversion conversion = catalog.convertCount(
                     userId,
                     line.getProductId(),
                     line.getDisplayQuantity(),

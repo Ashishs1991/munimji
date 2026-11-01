@@ -148,6 +148,9 @@ public class WhatsAppTurn {
         if (message.isApprovalBound()) {
             return approveBound(message);
         }
+        if (message.getDraftId() != null) {
+            return new Prepared(message.getPhone(), details(message.getUserId(), message.getDraftId()));
+        }
         if (message.getMediaId() != null) {
             return fromMedia(message);
         }

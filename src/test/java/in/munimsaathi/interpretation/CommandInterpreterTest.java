@@ -7,6 +7,7 @@ import in.munimsaathi.catalog.PartyBook;
 import in.munimsaathi.catalog.PartyRole;
 import in.munimsaathi.catalog.Product;
 import in.munimsaathi.draft.DraftBook;
+import in.munimsaathi.draft.DraftLineRepository;
 import in.munimsaathi.draft.DraftStatus;
 import in.munimsaathi.inventory.CountService;
 import in.munimsaathi.ledger.Paise;
@@ -73,6 +74,9 @@ class CommandInterpreterTest {
     private DraftBook drafts;
 
     @Autowired
+    private DraftLineRepository draftLines;
+
+    @Autowired
     private PostedDocumentRepository documents;
 
     @Test
@@ -107,6 +111,25 @@ class CommandInterpreterTest {
 
         assertThat(outcome.draft().status()).isEqualTo(DraftStatus.AWAITING_APPROVAL);
         assertThat(documents.findByOperationId(outcome.draft().id())).isEmpty();
+    }
+
+    @Test
+    void aMultiItemReplyKeepsEveryLine() {
+        Shop shop = shop();
+        Product tape = catalog.registerProduct(
+                shop.userId(), "TAPE-" + shop.userId().toString().substring(0, 8), "Tape", null, null, "piece", false
+        );
+        when(model.complete("do box")).thenReturn("""
+                {"intent":"sale","party_name":"Agarwal","location_code":"g1","lines":[
+                  {"product_name":"Office folder","quantity":"1","unit":"box","amount_paise":100000},
+                  {"product_name":"Tape","quantity":"2","unit":"piece","amount_paise":5000}
+                ],"requested_tools":[]}
+                """);
+
+        InterpretationOutcome outcome = interpreter.interpret(shop.userId(), "do box", DAY, AT);
+
+        assertThat(draftLines.findByDraftIdOrderByLineNumberAsc(outcome.draft().id())).hasSize(2);
+        assertThat(draftLines.findByDraftIdOrderByLineNumberAsc(outcome.draft().id()).get(1).getProductId()).isEqualTo(tape.getId());
     }
 
     @Test

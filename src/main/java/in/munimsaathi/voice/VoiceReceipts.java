@@ -16,6 +16,8 @@ import in.munimsaathi.draft.DraftLineSpec;
 import in.munimsaathi.draft.DraftProposal;
 import in.munimsaathi.evidence.Evidence;
 import in.munimsaathi.evidence.EvidenceRepository;
+import in.munimsaathi.interpretation.CommandInterpreter;
+import in.munimsaathi.interpretation.InterpretationOutcome;
 import in.munimsaathi.interpretation.LanguageModel;
 import in.munimsaathi.interpretation.Transcriber;
 import in.munimsaathi.tenant.Godown;
@@ -45,6 +47,7 @@ public class VoiceReceipts {
     private final TenantContext tenants;
     private final Transcriber transcriber;
     private final LanguageModel model;
+    private final CommandInterpreter interpreter;
     private final ObjectMapper mapper;
     private final PartyBook parties;
     private final CatalogService catalog;
@@ -58,6 +61,7 @@ public class VoiceReceipts {
             TenantContext tenants,
             Transcriber transcriber,
             LanguageModel model,
+            CommandInterpreter interpreter,
             ObjectMapper mapper,
             PartyBook parties,
             CatalogService catalog,
@@ -70,6 +74,7 @@ public class VoiceReceipts {
         this.tenants = tenants;
         this.transcriber = transcriber;
         this.model = model;
+        this.interpreter = interpreter;
         this.mapper = mapper;
         this.parties = parties;
         this.catalog = catalog;
@@ -100,17 +105,17 @@ public class VoiceReceipts {
         if (transcript == null || transcript.isBlank()) {
             throw new IllegalArgumentException("The voice note had no transcript.");
         }
-        JsonNode reply;
-        try {
-            reply = mapper.readTree(model.complete(transcript));
-        } catch (Exception exception) {
-            throw new IllegalArgumentException("The model reply was not readable.", exception);
+        InterpretationOutcome outcome = interpreter.applyExtraction(
+                userId,
+                null,
+                model.complete(transcript),
+                occurredOn,
+                occurredAt
+        );
+        if (outcome.draft() == null) {
+            throw new IllegalArgumentException("The model reply was not readable.");
         }
-        UUID customerId = party(userId, text(reply, "party_name"));
-        UUID locationId = location(userId, text(reply, "location_code"));
-        String action = "sale".equalsIgnoreCase(text(reply, "intent")) ? "sale" : null;
-        List<DraftLineSpec> lines = lines(userId, reply);
-        DraftProposal draft = drafts.proposeLines(userId, action, customerId, locationId, lines, occurredOn, occurredAt);
+        DraftProposal draft = outcome.draft();
         UUID businessId = tenants.currentBusinessId(userId);
         Evidence stored = evidence.save(new Evidence(
                 UUID.randomUUID(),
