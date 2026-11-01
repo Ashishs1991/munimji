@@ -27,6 +27,10 @@ import java.time.LocalDate;
 import java.util.HexFormat;
 import java.util.List;
 import java.util.UUID;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.anyString;
@@ -138,6 +142,31 @@ class WhatsAppIngressTest {
         assertThat(open).hasSize(1);
         assertThat(messages.findByMessageId("wamid.once").orElseThrow().getDraftId()).isEqualTo(draftId);
         verify(model, times(1)).complete("ek box once");
+    }
+
+    @Test
+    void twoDeliveriesOfTheSameMessageStayOneRow() throws Exception {
+        UUID userId = owner();
+        ingress.allow(userId, PHONE);
+        byte[] body = message("wamid.race", PHONE, "Hi");
+        String signature = sign(body);
+        CountDownLatch start = new CountDownLatch(1);
+        ExecutorService pool = Executors.newFixedThreadPool(2);
+        try {
+            Future<Integer> first = pool.submit(() -> {
+                start.await();
+                return ingress.receive(signature, body).status();
+            });
+            Future<Integer> second = pool.submit(() -> {
+                start.await();
+                return ingress.receive(signature, body).status();
+            });
+            start.countDown();
+            assertThat(List.of(first.get(), second.get())).containsOnly(200);
+        } finally {
+            pool.shutdown();
+        }
+        assertThat(messages.countByMessageId("wamid.race")).isEqualTo(1);
     }
 
     @Test

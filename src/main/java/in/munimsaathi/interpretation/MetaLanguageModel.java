@@ -77,15 +77,40 @@ public class MetaLanguageModel implements LanguageModel {
                 .body(String.class);
         try {
             JsonNode content = mapper.readTree(body).path("choices").path(0).path("message").path("content");
-            if (content.isMissingNode() || content.asText().isBlank()) {
+            String text = textOf(content);
+            if (text.isBlank()) {
                 throw new IllegalArgumentException("The model reply was empty.");
             }
-            return content.asText();
+            return text;
         } catch (IllegalArgumentException exception) {
             throw exception;
         } catch (Exception exception) {
             throw new IllegalArgumentException("The model reply was not readable.", exception);
         }
+    }
+
+    private static String textOf(JsonNode content) {
+        if (content == null || content.isMissingNode() || content.isNull()) {
+            return "";
+        }
+        if (content.isTextual()) {
+            return content.asText();
+        }
+        if (!content.isArray()) {
+            return content.asText("");
+        }
+        StringBuilder text = new StringBuilder();
+        for (JsonNode part : content) {
+            String piece = part.isTextual() ? part.asText() : part.path("text").asText("");
+            if (piece.isBlank()) {
+                continue;
+            }
+            if (!text.isEmpty()) {
+                text.append('\n');
+            }
+            text.append(piece);
+        }
+        return text.toString();
     }
 
     private static String trimSlash(String baseUrl) {

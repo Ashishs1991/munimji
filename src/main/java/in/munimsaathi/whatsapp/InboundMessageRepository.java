@@ -1,12 +1,35 @@
 package in.munimsaathi.whatsapp;
 
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Modifying;
+import org.springframework.data.jpa.repository.Query;
+import org.springframework.data.repository.query.Param;
 
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 
 public interface InboundMessageRepository extends JpaRepository<InboundMessage, UUID> {
+
+    @Modifying
+    @Query(value = """
+            insert into inbound_messages
+                (id, business_id, user_id, message_id, phone, body, status, media_id, media_type, approval_bound)
+            values
+                (:id, :businessId, :userId, :messageId, :phone, :body, :status, :mediaId, :mediaType, false)
+            on conflict (message_id) do nothing
+            """, nativeQuery = true)
+    int insertIfAbsent(
+            @Param("id") UUID id,
+            @Param("businessId") UUID businessId,
+            @Param("userId") UUID userId,
+            @Param("messageId") String messageId,
+            @Param("phone") String phone,
+            @Param("body") String body,
+            @Param("status") String status,
+            @Param("mediaId") String mediaId,
+            @Param("mediaType") String mediaType
+    );
 
     Optional<InboundMessage> findByMessageId(String messageId);
 

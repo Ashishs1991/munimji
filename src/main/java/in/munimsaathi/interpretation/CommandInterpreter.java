@@ -98,13 +98,10 @@ public class CommandInterpreter {
         if (text == null || text.isBlank()) {
             throw new IllegalArgumentException("A command is required.");
         }
-        JsonNode reply;
-        try {
-            reply = mapper.readTree(model.complete(text));
-        } catch (IllegalArgumentException exception) {
-            throw exception;
-        } catch (Exception exception) {
-            throw new IllegalArgumentException("The model reply was not readable.", exception);
+        String modelText = model.complete(text);
+        JsonNode reply = commandJson(modelText);
+        if (reply == null) {
+            return new InterpretationOutcome(null, List.of(), null, modelText.trim());
         }
         return apply(userId, draftId, reply, occurredOn, occurredAt);
     }
@@ -117,11 +114,9 @@ public class CommandInterpreter {
             LocalDate occurredOn,
             Instant occurredAt
     ) {
-        JsonNode reply;
-        try {
-            reply = mapper.readTree(modelJson);
-        } catch (Exception exception) {
-            throw new IllegalArgumentException("The model reply was not readable.", exception);
+        JsonNode reply = commandJson(modelJson);
+        if (reply == null) {
+            return new InterpretationOutcome(null, List.of(), null, modelJson == null ? "" : modelJson.trim());
         }
         return apply(userId, draftId, reply, occurredOn, occurredAt);
     }
@@ -172,6 +167,79 @@ public class CommandInterpreter {
                 ? drafts.propose(userId, action, customerId, productId, locationId, quantity, unit, amount, occurredOn, occurredAt)
                 : drafts.continueDraft(userId, draftId, action, customerId, productId, locationId, quantity, unit, amount, occurredOn, occurredAt);
         return new InterpretationOutcome(draft, refused, ewayDraftId, null);
+    }
+
+    private JsonNode commandJson(String modelText) {
+        if (modelText == null || modelText.isBlank()) {
+            throw new IllegalArgumentException("The model reply was empty.");
+        }
+        String trimmed = modelText.trim();
+        JsonNode parsed = tryObject(trimmed);
+        if (parsed == null) {
+            parsed = tryObject(stripFence(trimmed));
+        }
+        if (parsed == null) {
+            parsed = tryObject(objectSlice(trimmed));
+        }
+        return parsed;
+    }
+
+    private JsonNode tryObject(String text) {
+        if (text == null || text.isBlank()) {
+            return null;
+        }
+        try {
+            JsonNode node = mapper.readTree(text);
+            return node != null && node.isObject() ? node : null;
+        } catch (Exception exception) {
+            return null;
+        }
+    }
+
+    private static String stripFence(String text) {
+        if (!text.startsWith("```")) {
+            return text;
+        }
+        int firstNewline = text.indexOf('\n');
+        int lastFence = text.lastIndexOf("```");
+        if (firstNewline < 0 || lastFence <= firstNewline) {
+            return text;
+        }
+        return text.substring(firstNewline + 1, lastFence).trim();
+    }
+
+    private static String objectSlice(String text) {
+        int start = text.indexOf('{');
+        if (start < 0) {
+            return null;
+        }
+        int depth = 0;
+        boolean inString = false;
+        boolean escaped = false;
+        for (int i = start; i < text.length(); i++) {
+            char current = text.charAt(i);
+            if (inString) {
+                if (escaped) {
+                    escaped = false;
+                } else if (current == '\\') {
+                    escaped = true;
+                } else if (current == '"') {
+                    inString = false;
+                }
+                continue;
+            }
+            if (current == '"') {
+                inString = true;
+            } else if (current == '{') {
+                depth++;
+            } else if (current == '}') {
+                depth--;
+                if (depth == 0) {
+                    return text.substring(start, i + 1);
+                }
+            }
+        }
+        return null;
     }
 
     private String answerFor(UUID userId, String intent, UUID partyId, UUID productId, JsonNode reply) {

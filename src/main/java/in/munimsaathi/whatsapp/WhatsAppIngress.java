@@ -126,21 +126,29 @@ public class WhatsAppIngress {
     ) {
         InboundMessage existing = messages.findByMessageId(messageId).orElse(null);
         if (existing != null) {
-            int code = existing.getStatus() == InboundStatus.REJECTED ? 403 : 200;
-            return new WebhookResult(code, existing.getId());
+            return storedResult(existing);
         }
-        InboundMessage saved = new InboundMessage(
-                UUID.randomUUID(),
+        UUID id = UUID.randomUUID();
+        int inserted = messages.insertIfAbsent(
+                id,
                 businessId,
                 userId,
                 messageId,
                 phone,
                 body,
-                status
+                status.name(),
+                mediaId,
+                mediaType
         );
-        saved.attachMedia(mediaId, mediaType);
-        messages.save(saved);
-        return new WebhookResult(httpStatus, saved.getId());
+        if (inserted == 0) {
+            return storedResult(messages.findByMessageId(messageId).orElseThrow());
+        }
+        return new WebhookResult(httpStatus, id);
+    }
+
+    private static WebhookResult storedResult(InboundMessage existing) {
+        int code = existing.getStatus() == InboundStatus.REJECTED ? 403 : 200;
+        return new WebhookResult(code, existing.getId());
     }
 
     private static JsonNode media(JsonNode message) {

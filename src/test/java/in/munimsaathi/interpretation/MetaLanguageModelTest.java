@@ -35,6 +35,20 @@ class MetaLanguageModelTest {
     }
 
     @Test
+    void aReplySplitIntoPartsIsJoined() {
+        RestClient.Builder builder = RestClient.builder();
+        MockRestServiceServer server = MockRestServiceServer.bindTo(builder).build();
+        server.expect(requestTo("https://meta.example/chat/completions"))
+                .andRespond(withSuccess("""
+                        {"choices":[{"message":{"content":[{"type":"text","text":"{\\"intent\\":\\"sale\\"}"}]}}]}
+                        """, MediaType.APPLICATION_JSON));
+        MetaLanguageModel model = new MetaLanguageModel(properties(), builder, new ObjectMapper());
+
+        assertThat(model.complete("Hi")).isEqualTo("{\"intent\":\"sale\"}");
+        server.verify();
+    }
+
+    @Test
     void aPhotoIsSentAsAnImageAndAPdfIsSentAsItsText() throws Exception {
         RestClient.Builder builder = RestClient.builder();
         MockRestServiceServer server = MockRestServiceServer.bindTo(builder).build();

@@ -150,6 +150,29 @@ class CommandInterpreterTest {
     }
 
     @Test
+    void aGreetingIsSentBackAsTheModelWroteIt() {
+        Shop shop = shop();
+        when(model.complete("Hi")).thenReturn("Namaste. Tell me the party, product, quantity, unit, and price.");
+
+        InterpretationOutcome outcome = interpreter.interpret(shop.userId(), "Hi", DAY, AT);
+
+        assertThat(outcome.draft()).isNull();
+        assertThat(outcome.answer()).isEqualTo("Namaste. Tell me the party, product, quantity, unit, and price.");
+    }
+
+    @Test
+    void aFencedSaleReplyStillBecomesADraft() {
+        Shop shop = shop();
+        when(model.complete("sold 2 piece office folder to Agarwal")).thenReturn("```json\n" + saleJson().trim() + "\n```");
+
+        InterpretationOutcome outcome = interpreter.interpret(shop.userId(), "sold 2 piece office folder to Agarwal", DAY, AT);
+
+        assertThat(outcome.draft()).isNotNull();
+        assertThat(outcome.draft().amountPaise()).isEqualTo(Paise.fromRupees(1000));
+        assertThat(outcome.answer()).isNull();
+    }
+
+    @Test
     void aWordedQuantityIsNotTurnedIntoANumber() {
         Shop shop = shop();
         when(model.complete(anyString())).thenReturn("""
