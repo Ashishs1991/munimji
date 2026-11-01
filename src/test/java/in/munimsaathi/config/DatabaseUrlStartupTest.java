@@ -28,6 +28,8 @@ class DatabaseUrlStartupTest {
         new DatabaseUrlEnvironment().postProcessEnvironment(environment, new SpringApplication());
 
         assertThat(environment.getProperty("DATABASE_URL"))
-                .isEqualTo("jdbc:postgresql://postgres:secret@db.railway.internal:5432/railway");
+                .isEqualTo("jdbc:postgresql://db.railway.internal:5432/railway");
+        assertThat(environment.getProperty("DATABASE_USERNAME")).isEqualTo("postgres");
+        assertThat(environment.getProperty("DATABASE_PASSWORD")).isEqualTo("secret");
     }
 }
