@@ -22,6 +22,7 @@ class MetaLanguageModelTest {
         MockRestServiceServer server = MockRestServiceServer.bindTo(builder).build();
         server.expect(requestTo("https://meta.example/chat/completions"))
                 .andExpect(header("Authorization", "Bearer test-key"))
+                .andExpect(header("Content-Length", org.hamcrest.Matchers.not(org.hamcrest.Matchers.blankString())))
                 .andExpect(content().string(org.hamcrest.Matchers.containsString("muse-spark-1.3")))
                 .andExpect(content().string(org.hamcrest.Matchers.containsString("अग्रवाल को एक बॉक्स")))
                 .andExpect(content().string(org.hamcrest.Matchers.containsString("You cannot approve")))

@@ -1,5 +1,6 @@
 package in.munimsaathi.interpretation;
 
+import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import in.munimsaathi.config.MunimProperties;
@@ -67,20 +68,17 @@ public class MetaLanguageModel implements LanguageModel {
         if (apiKey == null || apiKey.isBlank() || baseUrl == null || baseUrl.isBlank()) {
             throw new IllegalStateException("Meta API key is not configured.");
         }
+        apiKey = apiKey.trim();
         String model = configuredModel(properties.meta().reasoningModel());
         String endpoint = trimSlash(baseUrl) + "/chat/completions";
-        log.info("Meta chat request baseUrl={} endpoint={} model={}", baseUrl, endpoint, model);
+        byte[] payload = payload(model, userContent);
+        log.info("Meta chat request baseUrl={} endpoint={} model={} bodyBytes={} keyLength={}", baseUrl, endpoint, model, payload.length, apiKey.length());
         String body = client.post()
                 .uri(endpoint)
                 .header("Authorization", "Bearer " + apiKey)
                 .contentType(MediaType.APPLICATION_JSON)
-                .body(Map.of(
-                        "model", model,
-                        "messages", List.of(
-                                Map.of("role", "system", "content", INSTRUCTIONS),
-                                Map.of("role", "user", "content", userContent)
-                        )
-                ))
+                .contentLength(payload.length)
+                .body(payload)
                 .retrieve()
                 .body(String.class);
         try {
@@ -119,6 +117,20 @@ public class MetaLanguageModel implements LanguageModel {
             text.append(piece);
         }
         return text.toString();
+    }
+
+    private byte[] payload(String model, Object userContent) {
+        try {
+            return mapper.writeValueAsBytes(Map.of(
+                    "model", model,
+                    "messages", List.of(
+                            Map.of("role", "system", "content", INSTRUCTIONS),
+                            Map.of("role", "user", "content", userContent)
+                    )
+            ));
+        } catch (JsonProcessingException exception) {
+            throw new IllegalStateException("The model request could not be written.", exception);
+        }
     }
 
     private static String configuredModel(String model) {
