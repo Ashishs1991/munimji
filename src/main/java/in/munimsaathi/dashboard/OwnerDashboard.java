@@ -14,6 +14,10 @@ import in.munimsaathi.ledger.FinanceStatus;
 import in.munimsaathi.ledger.PartyLedgerRepository;
 import in.munimsaathi.ledger.PostedDocument;
 import in.munimsaathi.ledger.PostedDocumentRepository;
+import in.munimsaathi.reminder.ReminderKind;
+import in.munimsaathi.reminder.ReminderStatus;
+import in.munimsaathi.reminder.ReminderTask;
+import in.munimsaathi.reminder.ReminderTaskRepository;
 import in.munimsaathi.tenant.Business;
 import in.munimsaathi.tenant.BusinessAccessDeniedException;
 import in.munimsaathi.tenant.BusinessContextRepository;
@@ -52,6 +56,7 @@ public class OwnerDashboard {
     private final DraftRepository drafts;
     private final StockThresholdRepository thresholds;
     private final LowStockAlertRepository alerts;
+    private final ReminderTaskRepository reminders;
 
     public OwnerDashboard(
             TenantContext tenants,
@@ -65,7 +70,8 @@ public class OwnerDashboard {
             PostedDocumentRepository documents,
             DraftRepository drafts,
             StockThresholdRepository thresholds,
-            LowStockAlertRepository alerts
+            LowStockAlertRepository alerts,
+            ReminderTaskRepository reminders
     ) {
         this.tenants = tenants;
         this.memberships = memberships;
@@ -79,6 +85,7 @@ public class OwnerDashboard {
         this.drafts = drafts;
         this.thresholds = thresholds;
         this.alerts = alerts;
+        this.reminders = reminders;
     }
 
     @Transactional
@@ -163,7 +170,8 @@ public class OwnerDashboard {
                         plain(alert.getObservedQuantity()),
                         plain(alert.getThresholdQuantity())
                 )).toList(),
-                false
+                false,
+                ownerReminders(businessId)
         );
     }
 
@@ -250,8 +258,26 @@ public class OwnerDashboard {
                 0,
                 0,
                 List.of(),
-                false
+                false,
+                List.of()
         );
+    }
+
+    private List<String> ownerReminders(UUID businessId) {
+        return reminders.findByBusinessIdAndStatusIn(businessId, List.of(
+                ReminderStatus.AWAITING_APPROVAL,
+                ReminderStatus.NEEDS_REAPPROVAL,
+                ReminderStatus.SCHEDULED,
+                ReminderStatus.DASHBOARD
+        )).stream()
+                .filter(task -> task.getKind() == ReminderKind.OWNER_REMINDER)
+                .map(OwnerDashboard::reminderText)
+                .toList();
+    }
+
+    private static String reminderText(ReminderTask task) {
+        String note = task.getApprovedPayload() == null ? "owner reminder" : task.getApprovedPayload();
+        return task.getStatus() + " " + task.getLocalDate() + " " + note;
     }
 
     private static long sum(List<PostedDocument> documents, DocumentKind kind) {

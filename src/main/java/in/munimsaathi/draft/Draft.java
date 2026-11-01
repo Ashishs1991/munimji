@@ -68,6 +68,12 @@ public class Draft {
     @Column(name = "expires_at", nullable = false)
     private Instant expiresAt;
 
+    @Column(name = "presented_version")
+    private Long presentedVersion;
+
+    @Column(name = "presented_hash")
+    private String presentedHash;
+
     protected Draft() {
     }
 
@@ -140,6 +146,19 @@ public class Draft {
 
     public String getMissingFields() {
         return missingFields;
+    }
+
+    public Long getPresentedVersion() {
+        return presentedVersion;
+    }
+
+    public String getPresentedHash() {
+        return presentedHash;
+    }
+
+    public void present() {
+        this.presentedVersion = this.version;
+        this.presentedHash = this.contentHash;
     }
 
     void replace(

@@ -19,6 +19,7 @@ import in.munimsaathi.tenant.Membership;
 import in.munimsaathi.tenant.MembershipRepository;
 import in.munimsaathi.tenant.MembershipRole;
 import in.munimsaathi.tenant.TenantContext;
+import jakarta.servlet.http.Cookie;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
@@ -218,6 +219,49 @@ class DashboardTest {
         Overview otherBooks = dashboard.overview(shop.userId(), DAY);
         assertThat(otherBooks.businessName()).isEqualTo("Other House");
         assertThat(otherBooks.stock()).isEmpty();
+    }
+
+    @Test
+    void aCookieChangeNeedsTheDashboardTokenAndAnOwnerRole() throws Exception {
+        Shop shop = shop();
+        String token = OwnerTokens.sign("test-owner-secret", shop.userId(), Instant.now().plus(1, ChronoUnit.HOURS));
+        mockMvc.perform(post("/dashboard/threshold")
+                        .cookie(new Cookie("munim_session", token))
+                        .header("Origin", "https://evil.example")
+                        .param("userId", shop.userId().toString())
+                        .param("productId", shop.productId().toString())
+                        .param("minimum", "1")
+                        .param("date", "2026-08-01"))
+                .andExpect(status().isForbidden());
+        mockMvc.perform(post("/dashboard/threshold")
+                        .cookie(new Cookie("munim_session", token))
+                        .param("userId", shop.userId().toString())
+                        .param("productId", shop.productId().toString())
+                        .param("minimum", "1")
+                        .param("date", "2026-08-01"))
+                .andExpect(status().isForbidden())
+                .andExpect(content().string(containsString("A CSRF token is required.")));
+        var saved = mockMvc.perform(post("/dashboard/threshold")
+                        .cookie(new Cookie("munim_session", token))
+                        .cookie(new Cookie("munim_csrf", "token-1"))
+                        .header("X-CSRF-Token", "token-1")
+                        .header("Origin", "http://localhost")
+                        .param("userId", shop.userId().toString())
+                        .param("productId", shop.productId().toString())
+                        .param("minimum", "1")
+                        .param("date", "2026-08-01"))
+                .andExpect(status().is3xxRedirection())
+                .andReturn();
+        assertThat(saved.getResponse().getHeaders("Set-Cookie").toString()).contains("SameSite=Strict");
+
+        UUID operator = UUID.randomUUID();
+        memberships.save(new Membership(UUID.randomUUID(), shop.businessId(), operator, MembershipRole.OPERATOR));
+        mockMvc.perform(get("/dashboard")
+                        .header("Authorization", bearer(operator))
+                        .param("userId", operator.toString())
+                        .param("date", "2026-08-01"))
+                .andExpect(status().isForbidden())
+                .andExpect(content().string(containsString("This sign-in is not an owner.")));
     }
 
     private static String bearer(UUID userId) {

@@ -39,4 +39,8 @@ public class Membership {
     public UUID getBusinessId() {
         return businessId;
     }
+
+    public MembershipRole getRole() {
+        return role;
+    }
 }

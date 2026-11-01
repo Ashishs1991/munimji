@@ -39,6 +39,7 @@ public class DashboardController {
     ) {
         UUID ownerId = owner(request, userId);
         model.addAttribute("userId", ownerId);
+        model.addAttribute("csrfToken", request.getAttribute(OwnerSessionFilter.CSRF_TOKEN));
         model.addAttribute("overview", dashboard.overview(ownerId, date));
         return "dashboard";
     }

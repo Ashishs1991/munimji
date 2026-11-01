@@ -24,7 +24,8 @@ public record Overview(
         int awaitingApproval,
         int financePending,
         List<AlertRow> lowStock,
-        boolean forecastAvailable
+        boolean forecastAvailable,
+        List<String> ownerReminders
 ) {
     public String receivableRupees() {
         return rupees(receivablePaise);

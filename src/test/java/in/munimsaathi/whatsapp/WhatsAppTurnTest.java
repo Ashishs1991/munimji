@@ -5,8 +5,15 @@ import in.munimsaathi.catalog.CatalogService;
 import in.munimsaathi.catalog.PartyBook;
 import in.munimsaathi.catalog.PartyRole;
 import in.munimsaathi.catalog.Product;
+import in.munimsaathi.dashboard.OwnerDashboard;
+import in.munimsaathi.draft.Draft;
 import in.munimsaathi.draft.DraftBook;
 import in.munimsaathi.draft.DraftRepository;
+import in.munimsaathi.jobs.Job;
+import in.munimsaathi.jobs.JobRepository;
+import in.munimsaathi.reminder.ReminderBook;
+import in.munimsaathi.reminder.ReminderKind;
+import in.munimsaathi.tenant.TenantContext;
 import in.munimsaathi.draft.DraftStatus;
 import in.munimsaathi.interpretation.LanguageModel;
 import in.munimsaathi.interpretation.Transcriber;
@@ -32,6 +39,8 @@ import java.math.BigDecimal;
 import java.nio.charset.StandardCharsets;
 import java.time.Instant;
 import java.time.LocalDate;
+import java.time.LocalTime;
+import java.time.ZoneId;
 import java.util.HexFormat;
 import java.util.UUID;
 
@@ -99,6 +108,18 @@ class WhatsAppTurnTest {
 
     @Autowired
     private DraftRepository draftRows;
+
+    @Autowired
+    private TenantContext tenants;
+
+    @Autowired
+    private ReminderBook reminders;
+
+    @Autowired
+    private JobRepository jobs;
+
+    @Autowired
+    private OwnerDashboard dashboard;
 
     @Test
     void aStoredMessageBecomesOneReplyAndASecondPassDoesNotCallTheModelAgain() {
@@ -245,6 +266,93 @@ class WhatsAppTurnTest {
         UUID businessId = memberships.findByAuthUserId(userId).get(0).getBusinessId();
         assertThat(draftRows.findAll().stream().filter(draft -> businessId.equals(draft.getBusinessId())).toList()).hasSize(1);
         assertThat(messages.findByMessageId("wamid.voice-retry").orElseThrow().getStatus()).isEqualTo(InboundStatus.STORED);
+    }
+
+    @Test
+    void yesKeepsTheVersionTheOwnerWasShown() {
+        String phone = "919800000120";
+        Shelf shelf = shelf(phone);
+        LocalDate day = LocalDate.of(2026, 8, 1);
+        Instant at = Instant.parse("2026-08-01T04:30:00Z");
+        var proposal = drafts.propose(
+                shelf.userId(), "sale", shelf.customerId(), shelf.productId(), shelf.godownId(),
+                BigDecimal.ONE, "box", 100_000L, day, at
+        );
+        Draft shown = draftRows.findById(proposal.id()).orElseThrow();
+        shown.present();
+        draftRows.save(shown);
+        drafts.edit(
+                shelf.userId(), proposal.id(), "sale", shelf.customerId(), shelf.productId(), shelf.godownId(),
+                new BigDecimal("2"), "box", 100_000L, day, at
+        );
+        ingress.receive(sign(message("wamid.stale-yes", phone, "Yes")), message("wamid.stale-yes", phone, "Yes"));
+        when(session.sendText(eq(phone), anyString())).thenReturn(new ProviderReceipt("accepted", "wamid.out"));
+
+        turn.openStored();
+
+        verify(session).sendText(eq(phone), org.mockito.ArgumentMatchers.contains("This approval is no longer current."));
+        assertThat(counts.balance(shelf.userId(), shelf.productId(), shelf.godownId())).isEqualByComparingTo("50");
+        assertThat(draftRows.findById(proposal.id()).orElseThrow().getStatus()).isEqualTo(DraftStatus.AWAITING_APPROVAL);
+    }
+
+    @Test
+    void aStoredMessageStaysInTheBusinessItArrivedFor() {
+        String phone = "919800000118";
+        Shelf shelf = shelf(phone);
+        ingress.receive(
+                sign(message("wamid.business", phone, "Agarwal ko ek box")),
+                message("wamid.business", phone, "Agarwal ko ek box")
+        );
+        Business other = businesses.save(new Business(UUID.randomUUID(), "Other House", "Asia/Kolkata", "INR"));
+        memberships.save(new Membership(UUID.randomUUID(), other.getId(), shelf.userId(), MembershipRole.OWNER));
+        tenants.selectBusiness(shelf.userId(), other.getId());
+        when(model.complete("Agarwal ko ek box")).thenReturn("""
+                {"intent":"sale","party_name":"Agarwal","product_name":"Office folder","quantity":"1","unit":"box","amount_paise":100000,"location_code":"g1","requested_tools":[]}
+                """);
+        when(session.sendText(eq(phone), anyString())).thenReturn(new ProviderReceipt("accepted", "wamid.out"));
+
+        turn.openStored();
+
+        assertThat(draftRows.findAll().stream().filter(draft -> shelf.businessId().equals(draft.getBusinessId())).toList()).hasSize(1);
+        assertThat(draftRows.findAll().stream().filter(draft -> other.getId().equals(draft.getBusinessId())).toList()).isEmpty();
+        assertThat(dashboard.overview(shelf.userId(), LocalDate.of(2026, 8, 1)).businessName()).isEqualTo("Other House");
+    }
+
+    @Test
+    void yesApprovesAnOwnerReminderAndTheDashboardShowsIt() {
+        String phone = "919800000119";
+        Shelf shelf = shelf(phone);
+        LocalDate when = LocalDate.now(ZoneId.of("Asia/Kolkata")).plusDays(2);
+        UUID taskId = reminders.propose(
+                shelf.userId(),
+                ReminderKind.OWNER_REMINDER,
+                null,
+                null,
+                null,
+                when,
+                LocalTime.of(10, 0),
+                "owner reminder",
+                false,
+                null,
+                true
+        );
+        ingress.receive(sign(message("wamid.remind", phone, "Yes")), message("wamid.remind", phone, "Yes"));
+        when(session.sendText(eq(phone), anyString())).thenReturn(new ProviderReceipt("accepted", "wamid.out"));
+
+        turn.openStored();
+
+        verify(session).sendText(eq(phone), org.mockito.ArgumentMatchers.contains("Reminder approved"));
+        assertThat(dashboard.overview(shelf.userId(), LocalDate.of(2026, 8, 1)).ownerReminders())
+                .anyMatch(text -> text.contains("SCHEDULED") && text.contains("owner reminder"));
+        Job job = jobs.findAll().stream()
+                .filter(item -> taskId.toString().equals(item.getPayload()))
+                .findFirst()
+                .orElseThrow();
+        job.lease("owner-test", Instant.now().plusSeconds(60));
+        jobs.saveAndFlush(job);
+        reminders.dispatch(job, "owner-test", Instant.now());
+        assertThat(dashboard.overview(shelf.userId(), LocalDate.of(2026, 8, 1)).ownerReminders())
+                .anyMatch(text -> text.contains("DASHBOARD") && text.contains("owner reminder"));
     }
 
     private Shelf shelf(String phone) {

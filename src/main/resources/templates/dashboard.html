@@ -17,6 +17,7 @@
         </div>
         <form th:if="${overview.businesses.size() > 1}" method="post" th:action="@{/dashboard/business}" class="d-flex gap-2">
             <input type="hidden" name="userId" th:value="${userId}">
+            <input type="hidden" name="csrf" th:value="${csrfToken}">
             <input type="hidden" name="date" th:value="${overview.date}">
             <label class="visually-hidden" for="businessId">Business</label>
             <select id="businessId" name="businessId" class="form-select">
@@ -146,6 +147,7 @@
                 </ul>
                 <form method="post" th:action="@{/dashboard/threshold}" class="row g-2 align-items-end">
                     <input type="hidden" name="userId" th:value="${userId}">
+                    <input type="hidden" name="csrf" th:value="${csrfToken}">
                     <input type="hidden" name="date" th:value="${overview.date}">
                     <div class="col-md-5">
                         <label class="form-label" for="productId">Product</label>
@@ -161,6 +163,16 @@
                         <button class="btn btn-primary" type="submit">Save threshold</button>
                     </div>
                 </form>
+            </div>
+        </section>
+
+        <section class="card mb-4">
+            <div class="card-body">
+                <h2 class="h5">Reminders</h2>
+                <p th:if="${overview.ownerReminders.empty}" class="mb-0">No owner reminder.</p>
+                <ul th:unless="${overview.ownerReminders.empty}" class="mb-0">
+                    <li th:each="reminder : ${overview.ownerReminders}" th:text="${reminder}">Reminder</li>
+                </ul>
             </div>
         </section>
 

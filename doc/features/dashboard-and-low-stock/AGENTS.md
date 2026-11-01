@@ -6,7 +6,8 @@ Milestone 12. The owner page reads the same stock, money, and pending work as th
 
 - For one date, stock by godown, receivables, payables, sales, returns, and receipts match the posted rows whose business time falls on that date. A later sale does not change the earlier date.
 - Unknown expiry is listed when stock has no batch expiry. Customer-owned stock is left out of the on-hand table.
-- Pending work counts proposals that still need a field, proposals waiting for approval, and posted rows whose finance is still pending.
+- Pending work counts proposals that still need a field, proposals waiting for approval, and posted rows whose finance is still pending. Owner reminders that are waiting, scheduled, or shown on the dashboard are listed on the page.
+- Cookie changes to the page require the signed-in user to be an owner of that business and to send the dashboard CSRF token. A bearer token still identifies the owner for API calls.
 - Each sales figure links to the document id behind it. Payables are not netted with receivables.
 - An owner in two businesses sees no figures until one business is selected. The other business’s stock does not appear.
 - A low-stock alert opens when on-hand stock for that date is at or under the owner’s minimum. Opening the page again does not create a second alert. Raising the minimum above the stock resolves it. The page says the alert is not a forecast, and it does not invent a forecast or a profit.
@@ -27,4 +28,4 @@ The page is `GET /dashboard?userId=&date=`.
 
 ## Still open
 
-There is no sign-in yet. The page takes the owner id the membership already uses. Forecasts, scheduled tasks, and import status are not on this page.
+Forecasts and import status are not on this page. A historical date still refreshes low-stock alerts.

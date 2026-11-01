@@ -6,6 +6,7 @@ import org.springframework.transaction.annotation.Transactional;
 import java.time.Instant;
 import java.util.List;
 import java.util.UUID;
+import java.util.function.Supplier;
 
 @Service
 public class TenantContext {
@@ -49,5 +50,34 @@ public class TenantContext {
         BusinessContext context = contexts.findById(userId).orElseGet(() -> new BusinessContext(userId));
         context.select(businessId, Instant.now());
         contexts.save(context);
+    }
+
+    @Transactional
+    public <T> T inBusiness(UUID userId, UUID businessId, Supplier<T> work) {
+        if (businessId == null) {
+            return work.get();
+        }
+        if (!memberships.existsByAuthUserIdAndBusinessId(userId, businessId)) {
+            throw new BusinessAccessDeniedException();
+        }
+        BusinessContext context = contexts.findById(userId).orElse(null);
+        UUID previous = context == null ? null : context.getBusinessId();
+        boolean created = context == null;
+        if (created) {
+            context = new BusinessContext(userId);
+        }
+        context.select(businessId, Instant.now());
+        contexts.saveAndFlush(context);
+        try {
+            return work.get();
+        } finally {
+            if (created) {
+                contexts.delete(context);
+                contexts.flush();
+            } else if (previous != null && !previous.equals(businessId)) {
+                context.select(previous, Instant.now());
+                contexts.saveAndFlush(context);
+            }
+        }
     }
 }

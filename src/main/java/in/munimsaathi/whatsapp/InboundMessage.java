@@ -53,6 +53,15 @@ public class InboundMessage {
     @Column(name = "approval_bound", nullable = false)
     private boolean approvalBound;
 
+    @Column(name = "reminder_task_id")
+    private UUID reminderTaskId;
+
+    @Column(name = "draft_version")
+    private Long draftVersion;
+
+    @Column(name = "content_hash")
+    private String contentHash;
+
     protected InboundMessage() {
     }
 
@@ -84,8 +93,19 @@ public class InboundMessage {
     }
 
     public void bindApproval(UUID draftId) {
+        bindApproval(draftId, null, null);
+    }
+
+    public void bindApproval(UUID draftId, Long version, String contentHash) {
         this.approvalBound = true;
         this.draftId = draftId;
+        this.draftVersion = version;
+        this.contentHash = contentHash;
+    }
+
+    public void bindReminder(UUID taskId) {
+        this.approvalBound = true;
+        this.reminderTaskId = taskId;
     }
 
     public void recordPosting(UUID documentId) {
@@ -149,6 +169,18 @@ public class InboundMessage {
 
     public boolean isApprovalBound() {
         return approvalBound;
+    }
+
+    public UUID getReminderTaskId() {
+        return reminderTaskId;
+    }
+
+    public Long getDraftVersion() {
+        return draftVersion;
+    }
+
+    public String getContentHash() {
+        return contentHash;
     }
 
     public UUID getBusinessId() {

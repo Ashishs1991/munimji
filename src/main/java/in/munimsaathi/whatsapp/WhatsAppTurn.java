@@ -16,6 +16,10 @@ import in.munimsaathi.evidence.DocumentStore;
 import in.munimsaathi.interpretation.CommandInterpreter;
 import in.munimsaathi.interpretation.InterpretationOutcome;
 import in.munimsaathi.reminder.ProviderReceipt;
+import in.munimsaathi.reminder.ReminderBook;
+import in.munimsaathi.reminder.ReminderStatus;
+import in.munimsaathi.reminder.ReminderTask;
+import in.munimsaathi.reminder.ReminderTaskRepository;
 import in.munimsaathi.tenant.Godown;
 import in.munimsaathi.tenant.GodownRepository;
 import in.munimsaathi.tenant.TenantContext;
@@ -51,6 +55,8 @@ public class WhatsAppTurn {
     private final VoiceReceipts voice;
     private final DocumentStore documents;
     private final TenantContext tenants;
+    private final ReminderBook reminders;
+    private final ReminderTaskRepository reminderTasks;
     private final SessionReply session;
     private final TransactionTemplate transactions;
 
@@ -67,6 +73,8 @@ public class WhatsAppTurn {
             VoiceReceipts voice,
             DocumentStore documents,
             TenantContext tenants,
+            ReminderBook reminders,
+            ReminderTaskRepository reminderTasks,
             SessionReply session,
             TransactionTemplate transactions
     ) {
@@ -82,6 +90,8 @@ public class WhatsAppTurn {
         this.voice = voice;
         this.documents = documents;
         this.tenants = tenants;
+        this.reminders = reminders;
+        this.reminderTasks = reminderTasks;
         this.session = session;
         this.transactions = transactions;
     }
@@ -131,10 +141,29 @@ public class WhatsAppTurn {
         if (!approval(message.getBody())) {
             return;
         }
-        List<Draft> pending = openDrafts(message.getUserId()).stream()
-                .filter(draft -> draft.getStatus() == DraftStatus.AWAITING_APPROVAL)
-                .toList();
-        message.bindApproval(pending.size() == 1 ? pending.get(0).getId() : null);
+        tenants.inBusiness(message.getUserId(), message.getBusinessId(), () -> {
+            List<Draft> pending = draftRows.findByBusinessIdAndStatus(
+                    message.getBusinessId(),
+                    DraftStatus.AWAITING_APPROVAL
+            );
+            List<ReminderTask> waiting = reminderTasks.findByBusinessIdAndStatusIn(
+                    message.getBusinessId(),
+                    List.of(ReminderStatus.AWAITING_APPROVAL, ReminderStatus.NEEDS_REAPPROVAL)
+            );
+            if (pending.size() + waiting.size() != 1) {
+                message.bindApproval(null);
+                return null;
+            }
+            if (pending.size() == 1) {
+                Draft draft = pending.get(0);
+                long version = draft.getPresentedVersion() == null ? draft.getVersion() : draft.getPresentedVersion();
+                String hash = draft.getPresentedHash() == null ? draft.getContentHash() : draft.getPresentedHash();
+                message.bindApproval(draft.getId(), version, hash);
+            } else {
+                message.bindReminder(waiting.get(0).getId());
+            }
+            return null;
+        });
     }
 
     private Prepared prepare(UUID id) {
@@ -142,6 +171,10 @@ public class WhatsAppTurn {
         if (message == null || message.getStatus() != InboundStatus.STORED || message.getUserId() == null) {
             return null;
         }
+        return tenants.inBusiness(message.getUserId(), message.getBusinessId(), () -> prepareInBusiness(message));
+    }
+
+    private Prepared prepareInBusiness(InboundMessage message) {
         if (message.getPostedDocumentId() != null) {
             return new Prepared(message.getPhone(), "Posted. " + details(message.getUserId(), message.getDraftId()));
         }
@@ -157,9 +190,6 @@ public class WhatsAppTurn {
         if (message.getBody() == null || message.getBody().isBlank()) {
             return new Prepared(message.getPhone(), "Send the instruction as text.");
         }
-        if (message.getDraftId() != null) {
-            return new Prepared(message.getPhone(), details(message.getUserId(), message.getDraftId()));
-        }
         LocalDate day = LocalDate.now(ZONE);
         Instant now = Instant.now();
         List<Draft> open = openDrafts(message.getUserId());
@@ -172,16 +202,25 @@ public class WhatsAppTurn {
     }
 
     private Prepared approveBound(InboundMessage message) {
-        if (message.getDraftId() == null) {
+        if (message.getReminderTaskId() != null) {
+            reminders.approve(message.getUserId(), message.getReminderTaskId());
+            return new Prepared(message.getPhone(), "Reminder approved. It stays on the dashboard and is not sent to the customer.");
+        }
+        if (message.getDraftId() == null || message.getDraftVersion() == null || message.getContentHash() == null) {
             return new Prepared(message.getPhone(), "Yes approves only one current proposal.");
         }
-        DraftProposal proposal = drafts.get(message.getUserId(), message.getDraftId());
-        if (proposal.status() == DraftStatus.POSTED) {
-            return new Prepared(message.getPhone(), "Posted. " + details(message.getUserId(), proposal.id()));
+        Draft stored = draftRows.findById(message.getDraftId()).orElse(null);
+        if (stored != null && stored.getStatus() == DraftStatus.POSTED) {
+            return new Prepared(message.getPhone(), "Posted. " + details(message.getUserId(), stored.getId()));
         }
-        UUID documentId = drafts.approve(message.getUserId(), proposal.id(), proposal.version(), proposal.contentHash());
+        UUID documentId = drafts.approve(
+                message.getUserId(),
+                message.getDraftId(),
+                message.getDraftVersion(),
+                message.getContentHash()
+        );
         message.recordPosting(documentId);
-        return new Prepared(message.getPhone(), "Posted. " + details(message.getUserId(), proposal.id()));
+        return new Prepared(message.getPhone(), "Posted. " + details(message.getUserId(), message.getDraftId()));
     }
 
     private Prepared fromMedia(InboundMessage message) {
@@ -261,6 +300,7 @@ public class WhatsAppTurn {
         }
         String facts = facts(draft);
         if (draft.getStatus() == DraftStatus.AWAITING_APPROVAL) {
+            draft.present();
             return "Reply Yes to post this draft only: " + facts + ".";
         }
         if (draft.getStatus() == DraftStatus.POSTED) {
