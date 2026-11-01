@@ -12,6 +12,8 @@ public interface ProductRepository extends JpaRepository<Product, UUID> {
 
     Optional<Product> findByBusinessIdAndSku(UUID businessId, String sku);
 
+    List<Product> findByBusinessId(UUID businessId);
+
     boolean existsByBusinessIdAndSku(UUID businessId, String sku);
 
     @Query("""

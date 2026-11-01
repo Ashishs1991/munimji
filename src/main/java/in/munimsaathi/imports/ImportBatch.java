@@ -74,6 +74,10 @@ public class ImportBatch {
         return id;
     }
 
+    public String getFileName() {
+        return fileName;
+    }
+
     public UUID getBusinessId() {
         return businessId;
     }

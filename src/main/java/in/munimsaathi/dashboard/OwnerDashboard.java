@@ -5,6 +5,9 @@ import in.munimsaathi.catalog.ProductRepository;
 import in.munimsaathi.draft.Draft;
 import in.munimsaathi.draft.DraftRepository;
 import in.munimsaathi.draft.DraftStatus;
+import in.munimsaathi.forecast.Forecast;
+import in.munimsaathi.forecast.ForecastService;
+import in.munimsaathi.imports.ImportBatchRepository;
 import in.munimsaathi.inventory.Ownership;
 import in.munimsaathi.inventory.StockMovementRepository;
 import in.munimsaathi.inventory.StockSlice;
@@ -57,6 +60,8 @@ public class OwnerDashboard {
     private final StockThresholdRepository thresholds;
     private final LowStockAlertRepository alerts;
     private final ReminderTaskRepository reminders;
+    private final ImportBatchRepository imports;
+    private final ForecastService forecasts;
 
     public OwnerDashboard(
             TenantContext tenants,
@@ -71,7 +76,9 @@ public class OwnerDashboard {
             DraftRepository drafts,
             StockThresholdRepository thresholds,
             LowStockAlertRepository alerts,
-            ReminderTaskRepository reminders
+            ReminderTaskRepository reminders,
+            ImportBatchRepository imports,
+            ForecastService forecasts
     ) {
         this.tenants = tenants;
         this.memberships = memberships;
@@ -86,6 +93,8 @@ public class OwnerDashboard {
         this.thresholds = thresholds;
         this.alerts = alerts;
         this.reminders = reminders;
+        this.imports = imports;
+        this.forecasts = forecasts;
     }
 
     @Transactional
@@ -143,8 +152,12 @@ public class OwnerDashboard {
         }
         stock.sort(Comparator.comparing(Overview.StockRow::godownName).thenComparing(Overview.StockRow::productName));
         List<String> unknownExpiry = unknownExpiry(businessId, until);
-        List<LowStockAlert> openAlerts = refreshAlerts(businessId, date, onHand);
+        boolean historical = date.isBefore(LocalDate.now(ZoneId.of(business.getTimezone())));
+        List<LowStockAlert> openAlerts = historical
+                ? alerts.findByBusinessIdAndResolvedAtIsNull(businessId)
+                : refreshAlerts(businessId, date, onHand);
         List<PostedDocument> today = documents.findByBusinessIdAndOccurredOn(businessId, date);
+        List<String> forecastLines = forecastLines(userId, businessId, date);
         return new Overview(
                 false,
                 business.getName(),
@@ -170,8 +183,11 @@ public class OwnerDashboard {
                         plain(alert.getObservedQuantity()),
                         plain(alert.getThresholdQuantity())
                 )).toList(),
-                false,
-                ownerReminders(businessId)
+                forecastLines.stream().anyMatch(line -> !line.endsWith("insufficient history")),
+                ownerReminders(businessId),
+                openDrafts(businessId),
+                importLines(businessId),
+                forecastLines
         );
     }
 
@@ -259,6 +275,9 @@ public class OwnerDashboard {
                 0,
                 List.of(),
                 false,
+                List.of(),
+                List.of(),
+                List.of(),
                 List.of()
         );
     }
@@ -273,6 +292,39 @@ public class OwnerDashboard {
                 .filter(task -> task.getKind() == ReminderKind.OWNER_REMINDER)
                 .map(OwnerDashboard::reminderText)
                 .toList();
+    }
+
+    private List<String> openDrafts(UUID businessId) {
+        return drafts.findByBusinessIdAndStatusIn(
+                businessId,
+                List.of(DraftStatus.NEEDS_CLARIFICATION, DraftStatus.AWAITING_APPROVAL)
+        ).stream().map(draft -> {
+            String missing = draft.getMissingFields();
+            if (missing == null || missing.isBlank()) {
+                return draft.getStatus().name();
+            }
+            return draft.getStatus().name() + " missing " + missing;
+        }).toList();
+    }
+
+    private List<String> importLines(UUID businessId) {
+        return imports.findByBusinessId(businessId).stream()
+                .map(batch -> batch.getStatus().name() + " " + batch.getFileName())
+                .toList();
+    }
+
+    private List<String> forecastLines(UUID userId, UUID businessId, LocalDate date) {
+        List<String> lines = new ArrayList<>();
+        for (Product product : products.findByBusinessId(businessId)) {
+            Forecast forecast = forecasts.forecast(userId, product.getId(), date);
+            if (forecast.forecastQuantity() == null) {
+                lines.add(product.getName() + ": insufficient history");
+            } else {
+                lines.add(product.getName() + ": " + forecast.forecastQuantity().toPlainString()
+                        + " over " + forecast.horizonDays() + " days");
+            }
+        }
+        return lines;
     }
 
     private static String reminderText(ReminderTask task) {

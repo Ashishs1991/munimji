@@ -10,7 +10,8 @@ Milestone 12. The owner page reads the same stock, money, and pending work as th
 - Cookie changes to the page require the signed-in user to be an owner of that business and to send the dashboard CSRF token. A bearer token still identifies the owner for API calls.
 - Each sales figure links to the document id behind it. Payables are not netted with receivables.
 - An owner in two businesses sees no figures until one business is selected. The other business’s stock does not appear.
-- A low-stock alert opens when on-hand stock for that date is at or under the owner’s minimum. Opening the page again does not create a second alert. Raising the minimum above the stock resolves it. The page says the alert is not a forecast, and it does not invent a forecast or a profit.
+- A low-stock alert opens when on-hand stock for the current date is at or under the owner’s minimum. Opening a past date does not create or change that alert. Opening the current date again does not create a second alert. Raising the minimum above the stock resolves it. The page says the alert is not a forecast.
+- Open proposals show their status and missing fields. Staged and active imports are listed by status and file name. A product with thin history is shown as insufficient history, and that line is not a reorder suggestion.
 
 ## Spec
 
@@ -28,4 +29,4 @@ The page is `GET /dashboard?userId=&date=`.
 
 ## Still open
 
-Forecasts and import status are not on this page. A historical date still refreshes low-stock alerts.
+A past date does not rewrite low-stock alerts. Forecast quantities stay hidden until the history is eligible.

@@ -165,6 +165,44 @@ class SalesReceiptTest {
         assertThat(invoiceNumbers.findByDocumentId(secondSale).orElseThrow().getNumber()).isEqualTo(1);
     }
 
+    @Test
+    void twoPaymentsCannotOverpayTheSameSale() throws Exception {
+        Shop shop = shop();
+        openBoxes(shop, new BigDecimal("5"));
+        UUID saleId = sell(shop, UUID.randomUUID(), shop.customerId());
+        java.util.concurrent.CountDownLatch start = new java.util.concurrent.CountDownLatch(1);
+        java.util.concurrent.atomic.AtomicInteger accepted = new java.util.concurrent.atomic.AtomicInteger();
+        java.util.concurrent.atomic.AtomicInteger rejected = new java.util.concurrent.atomic.AtomicInteger();
+        java.util.concurrent.ExecutorService pool = java.util.concurrent.Executors.newFixedThreadPool(2);
+        for (int attempt = 0; attempt < 2; attempt++) {
+            pool.submit(() -> {
+                try {
+                    start.await();
+                    posting.receivePayment(
+                            shop.userId(), UUID.randomUUID(), shop.customerId(), saleId,
+                            Paise.fromRupees(700), "cash", DAY, AT
+                    );
+                    accepted.incrementAndGet();
+                } catch (IllegalArgumentException exception) {
+                    if (exception.getMessage().contains("still owed")) {
+                        rejected.incrementAndGet();
+                    } else {
+                        throw exception;
+                    }
+                } catch (InterruptedException exception) {
+                    Thread.currentThread().interrupt();
+                }
+            });
+        }
+        start.countDown();
+        pool.shutdown();
+        assertThat(pool.awaitTermination(20, java.util.concurrent.TimeUnit.SECONDS)).isTrue();
+        assertThat(accepted.get()).isEqualTo(1);
+        assertThat(rejected.get()).isEqualTo(1);
+        assertThat(allocations.allocatedTo(saleId)).isEqualTo(Paise.fromRupees(700));
+        assertThat(posting.customerReceivablePaise(shop.userId(), shop.customerId())).isEqualTo(Paise.fromRupees(300));
+    }
+
     private UUID sell(Shop shop, UUID operationId, UUID customerId) {
         return posting.sell(
                 shop.userId(),

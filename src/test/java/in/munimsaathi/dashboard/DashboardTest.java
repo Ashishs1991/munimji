@@ -158,11 +158,22 @@ class DashboardTest {
         assertThat(nextDay.receivablePaise()).isEqualTo(Paise.fromRupees(1600));
 
         dashboard.setThreshold(shop.userId(), shop.productId(), new BigDecimal("45"));
-        Overview alerted = dashboard.overview(shop.userId(), DAY);
-        dashboard.overview(shop.userId(), DAY);
+        java.time.LocalDate liveDate = java.time.LocalDate.now(java.time.ZoneId.of("Asia/Kolkata"));
+        Overview alerted = dashboard.overview(shop.userId(), liveDate);
         assertThat(alerted.lowStock()).extracting(Overview.AlertRow::productName).containsExactly("Office folder");
         assertThat(alerted.forecastAvailable()).isFalse();
+        assertThat(alerted.forecastLines()).anyMatch(line -> line.contains("insufficient history"));
+        assertThat(alerted.openDrafts()).isNotEmpty();
         assertThat(alerts.countByBusinessIdAndProductId(shop.businessId(), shop.productId())).isEqualTo(1);
+        java.math.BigDecimal observed = alerts.findByBusinessIdAndProductIdAndResolvedAtIsNull(shop.businessId(), shop.productId())
+                .orElseThrow()
+                .getObservedQuantity();
+        dashboard.overview(shop.userId(), DAY);
+        dashboard.overview(shop.userId(), DAY);
+        assertThat(alerts.countByBusinessIdAndProductId(shop.businessId(), shop.productId())).isEqualTo(1);
+        assertThat(alerts.findByBusinessIdAndProductIdAndResolvedAtIsNull(shop.businessId(), shop.productId())
+                .orElseThrow()
+                .getObservedQuantity()).isEqualByComparingTo(observed);
 
         String page = "/dashboard?userId=" + shop.userId() + "&date=2026-08-01";
         mockMvc.perform(get("/dashboard").param("userId", shop.userId().toString()).param("date", "2026-08-01"))
@@ -193,7 +204,7 @@ class DashboardTest {
                 .andExpect(content().string(not(containsString("Profit"))));
 
         dashboard.setThreshold(shop.userId(), shop.productId(), new BigDecimal("10"));
-        Overview cleared = dashboard.overview(shop.userId(), DAY);
+        Overview cleared = dashboard.overview(shop.userId(), liveDate);
         assertThat(cleared.lowStock()).isEmpty();
         assertThat(alerts.countByBusinessIdAndProductId(shop.businessId(), shop.productId())).isEqualTo(1);
     }

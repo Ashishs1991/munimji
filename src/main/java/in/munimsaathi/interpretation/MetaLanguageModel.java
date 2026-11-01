@@ -7,7 +7,9 @@ import org.springframework.http.MediaType;
 import org.springframework.stereotype.Component;
 import org.springframework.web.client.RestClient;
 
+import java.util.Base64;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 
 @Component
@@ -37,6 +39,24 @@ public class MetaLanguageModel implements LanguageModel {
 
     @Override
     public String complete(String userText) {
+        return post(userText);
+    }
+
+    @Override
+    public String completeDocument(String instruction, String mediaType, String fileName, byte[] content) {
+        String type = mediaType == null ? "" : mediaType.toLowerCase(Locale.ROOT);
+        if (type.startsWith("image/")) {
+            String dataUrl = "data:" + type + ";base64," + Base64.getEncoder().encodeToString(content);
+            return post(List.of(
+                    Map.of("type", "text", "text", instruction),
+                    Map.of("type", "image_url", "image_url", Map.of("url", dataUrl))
+            ));
+        }
+        String documentText = "application/pdf".equals(type) ? PdfPages.text(content) : "";
+        return post(instruction + "\n" + documentText);
+    }
+
+    private String post(Object userContent) {
         String apiKey = properties.meta().apiKey();
         String baseUrl = properties.meta().baseUrl();
         if (apiKey == null || apiKey.isBlank() || baseUrl == null || baseUrl.isBlank()) {
@@ -50,7 +70,7 @@ public class MetaLanguageModel implements LanguageModel {
                         "model", properties.meta().reasoningModel(),
                         "messages", List.of(
                                 Map.of("role", "system", "content", INSTRUCTIONS),
-                                Map.of("role", "user", "content", userText)
+                                Map.of("role", "user", "content", userContent)
                         )
                 ))
                 .retrieve()

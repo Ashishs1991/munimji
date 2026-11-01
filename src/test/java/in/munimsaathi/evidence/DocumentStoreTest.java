@@ -35,7 +35,10 @@ import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.contains;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 @SpringBootTest
@@ -112,11 +115,17 @@ class DocumentStoreTest {
         DraftProposal draft = incomplete(shop);
         byte[] pdf = "%PDF-1.4 bill".getBytes(StandardCharsets.UTF_8);
         StoredFile stored = documents.attach(shop.userId(), draft.id(), "application/pdf", "bill.pdf", pdf);
-        when(model.complete(contains(stored.sha256()))).thenReturn("""
+        when(model.completeDocument(contains(stored.sha256()), eq("application/pdf"), eq("bill.pdf"), any()))
+                .thenReturn("""
                 {"intent":"sale","party_name":"Agarwal","product_name":"Office folder","quantity":"1","unit":"box","amount_paise":100000,"location_code":"g1","requested_tools":["approve_and_post"]}
                 """);
 
         var outcome = documents.extract(shop.userId(), stored.id(), DAY, AT);
+
+        org.mockito.ArgumentCaptor<String> instruction = org.mockito.ArgumentCaptor.forClass(String.class);
+        verify(model).completeDocument(instruction.capture(), eq("application/pdf"), eq("bill.pdf"), eq(pdf));
+        assertThat(instruction.getValue()).contains(stored.sha256());
+        assertThat(instruction.getValue()).doesNotContain("%PDF");
 
         assertThat(outcome.refusedTools()).containsExactly("approve_and_post");
         assertThat(outcome.draft().status()).isEqualTo(DraftStatus.AWAITING_APPROVAL);

@@ -25,7 +25,10 @@ public record Overview(
         int financePending,
         List<AlertRow> lowStock,
         boolean forecastAvailable,
-        List<String> ownerReminders
+        List<String> ownerReminders,
+        List<String> openDrafts,
+        List<String> imports,
+        List<String> forecastLines
 ) {
     public String receivableRupees() {
         return rupees(receivablePaise);

@@ -8,6 +8,7 @@ Milestone 14. A photo or PDF stays attached to one open draft. Extraction can fi
 - With one open draft, the file attaches to that draft. With two open drafts, the file is refused until the owner names which draft it belongs to.
 - A plain-text upload is refused.
 - Extraction proposes party, product, quantity, unit, price, and godown on that draft. A request inside the file to post is refused. Stock stays unchanged until the revised draft is approved.
+- A photo is sent to the model as an image attachment. A PDF is sent as its extracted text, or as a note that the file has no extractable text. The prompt does not paste a truncated copy of the file.
 
 ## Spec
 

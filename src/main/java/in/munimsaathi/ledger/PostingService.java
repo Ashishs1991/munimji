@@ -603,7 +603,7 @@ public class PostingService {
     }
 
     private PostedDocument requireSupplierBill(UUID businessId, UUID billId) {
-        PostedDocument bill = documents.findById(billId)
+        PostedDocument bill = documents.lockById(billId)
                 .orElseThrow(() -> new IllegalArgumentException("Unknown bill."));
         if (!bill.getBusinessId().equals(businessId)
                 || bill.getKind() != DocumentKind.SUPPLIER_BILL
@@ -959,7 +959,7 @@ public class PostingService {
     }
 
     private PostedDocument requireSale(UUID businessId, UUID customerId, UUID saleDocumentId) {
-        PostedDocument sale = documents.findById(saleDocumentId)
+        PostedDocument sale = documents.lockById(saleDocumentId)
                 .orElseThrow(() -> new IllegalArgumentException("Unknown sale."));
         if (!sale.getBusinessId().equals(businessId)
                 || sale.getKind() != DocumentKind.SALE

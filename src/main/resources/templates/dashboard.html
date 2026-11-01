@@ -136,6 +136,26 @@
 
         <section class="card mb-4">
             <div class="card-body">
+                <h2 class="h5">Open proposals</h2>
+                <p th:if="${overview.openDrafts.empty}" class="mb-0">No open proposal.</p>
+                <ul th:unless="${overview.openDrafts.empty}" class="mb-0">
+                    <li th:each="proposal : ${overview.openDrafts}" th:text="${proposal}">Proposal</li>
+                </ul>
+            </div>
+        </section>
+
+        <section class="card mb-4">
+            <div class="card-body">
+                <h2 class="h5">Imports</h2>
+                <p th:if="${overview.imports.empty}" class="mb-0">No staged or active import.</p>
+                <ul th:unless="${overview.imports.empty}" class="mb-0">
+                    <li th:each="batch : ${overview.imports}" th:text="${batch}">Import</li>
+                </ul>
+            </div>
+        </section>
+
+        <section class="card mb-4">
+            <div class="card-body">
                 <h2 class="h5">Low stock</h2>
                 <p>A threshold alert compares on-hand stock for this date with a quantity the owner set. It is not a forecast.</p>
                 <p th:if="${overview.lowStock.empty}" class="mb-3">No open threshold alert.</p>
@@ -179,7 +199,11 @@
         <section class="card">
             <div class="card-body">
                 <h2 class="h5">Forecast</h2>
-                <p class="mb-0">No forecast is available.</p>
+                <p th:if="${!overview.forecastAvailable}" class="mb-2">No forecast is available.</p>
+                <p th:if="${overview.forecastLines.empty}" class="mb-0">No product to forecast.</p>
+                <ul th:unless="${overview.forecastLines.empty}" class="mb-0">
+                    <li th:each="line : ${overview.forecastLines}" th:text="${line}">Forecast</li>
+                </ul>
             </div>
         </section>
     </div>
