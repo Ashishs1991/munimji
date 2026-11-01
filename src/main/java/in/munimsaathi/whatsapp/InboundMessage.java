@@ -38,6 +38,21 @@ public class InboundMessage {
     @Column(name = "draft_id")
     private UUID draftId;
 
+    @Column(name = "reply_status")
+    private String replyStatus;
+
+    @Column(name = "posted_document_id")
+    private UUID postedDocumentId;
+
+    @Column(name = "media_id")
+    private String mediaId;
+
+    @Column(name = "media_type")
+    private String mediaType;
+
+    @Column(name = "approval_bound", nullable = false)
+    private boolean approvalBound;
+
     protected InboundMessage() {
     }
 
@@ -61,6 +76,27 @@ public class InboundMessage {
 
     public void attachDraft(UUID draftId) {
         this.draftId = draftId;
+    }
+
+    public void attachMedia(String mediaId, String mediaType) {
+        this.mediaId = mediaId;
+        this.mediaType = mediaType;
+    }
+
+    public void bindApproval(UUID draftId) {
+        this.approvalBound = true;
+        this.draftId = draftId;
+    }
+
+    public void recordPosting(UUID documentId) {
+        this.postedDocumentId = documentId;
+    }
+
+    public void recordAttempt(String replyStatus) {
+        this.replyStatus = replyStatus;
+        if ("accepted".equals(replyStatus)) {
+            this.status = InboundStatus.REPLIED;
+        }
     }
 
     public void markReplied() {
@@ -93,6 +129,26 @@ public class InboundMessage {
 
     public UUID getDraftId() {
         return draftId;
+    }
+
+    public String getReplyStatus() {
+        return replyStatus;
+    }
+
+    public UUID getPostedDocumentId() {
+        return postedDocumentId;
+    }
+
+    public String getMediaId() {
+        return mediaId;
+    }
+
+    public String getMediaType() {
+        return mediaType;
+    }
+
+    public boolean isApprovalBound() {
+        return approvalBound;
     }
 
     public UUID getBusinessId() {

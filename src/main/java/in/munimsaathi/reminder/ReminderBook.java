@@ -173,7 +173,7 @@ public class ReminderBook {
             return Prepared.skip(task.getId(), "past the grace window");
         }
         if (!task.isNoteOnly()) {
-            long balance = posting.customerReceivablePaise(task.getActorId(), task.getPartyId());
+            long balance = posting.customerReceivablePaiseForBusiness(task.getBusinessId(), task.getPartyId());
             if (balance == 0) {
                 task.suppressPaid();
                 return Prepared.skip(task.getId(), "fully paid");

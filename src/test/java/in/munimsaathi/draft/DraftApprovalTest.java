@@ -29,6 +29,7 @@ import org.springframework.test.context.DynamicPropertySource;
 import java.math.BigDecimal;
 import java.time.Instant;
 import java.time.LocalDate;
+import java.util.List;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -177,6 +178,29 @@ class DraftApprovalTest {
         assertThat(counts.balance(shop.userId(), shop.productId(), shop.godownId())).isEqualByComparingTo("50");
 
         drafts.approve(shop.userId(), edited.id(), edited.version(), edited.contentHash());
+        assertThat(counts.balance(shop.userId(), shop.productId(), shop.godownId())).isEqualByComparingTo("30");
+    }
+
+    @Test
+    void anEditChangesTheLineThatPostingUses() {
+        Shop shop = shop();
+        openBoxes(shop, new BigDecimal("5"));
+        DraftProposal first = drafts.proposeLines(
+                shop.userId(),
+                "sale",
+                shop.customerId(),
+                shop.godownId(),
+                List.of(new DraftLineSpec(shop.productId(), BigDecimal.ONE, "box", Paise.fromRupees(1000), null)),
+                DAY,
+                AT
+        );
+        DraftProposal edited = drafts.edit(
+                shop.userId(), first.id(), "sale", shop.customerId(), shop.productId(), shop.godownId(),
+                new BigDecimal("2"), "box", Paise.fromRupees(1000), DAY, AT
+        );
+
+        drafts.approve(shop.userId(), edited.id(), edited.version(), edited.contentHash());
+
         assertThat(counts.balance(shop.userId(), shop.productId(), shop.godownId())).isEqualByComparingTo("30");
     }
 

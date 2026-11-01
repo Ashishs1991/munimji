@@ -1,7 +1,9 @@
 package in.munimsaathi.dashboard;
 
+import in.munimsaathi.config.OwnerSessionFilter;
 import in.munimsaathi.tenant.BusinessAccessDeniedException;
 import in.munimsaathi.tenant.TenantContext;
+import jakarta.servlet.http.HttpServletRequest;
 import org.springframework.format.annotation.DateTimeFormat;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
@@ -11,6 +13,7 @@ import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestParam;
+import org.springframework.web.server.ResponseStatusException;
 
 import java.math.BigDecimal;
 import java.time.LocalDate;
@@ -29,34 +32,51 @@ public class DashboardController {
 
     @GetMapping("/dashboard")
     public String show(
-            @RequestParam UUID userId,
+            HttpServletRequest request,
+            @RequestParam(required = false) UUID userId,
             @RequestParam @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate date,
             Model model
     ) {
-        model.addAttribute("userId", userId);
-        model.addAttribute("overview", dashboard.overview(userId, date));
+        UUID ownerId = owner(request, userId);
+        model.addAttribute("userId", ownerId);
+        model.addAttribute("overview", dashboard.overview(ownerId, date));
         return "dashboard";
     }
 
     @PostMapping("/dashboard/business")
     public String selectBusiness(
-            @RequestParam UUID userId,
+            HttpServletRequest request,
+            @RequestParam(required = false) UUID userId,
             @RequestParam UUID businessId,
             @RequestParam @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate date
     ) {
-        tenants.selectBusiness(userId, businessId);
-        return "redirect:/dashboard?userId=" + userId + "&date=" + date;
+        UUID ownerId = owner(request, userId);
+        tenants.selectBusiness(ownerId, businessId);
+        return "redirect:/dashboard?userId=" + ownerId + "&date=" + date;
     }
 
     @PostMapping("/dashboard/threshold")
     public String setThreshold(
-            @RequestParam UUID userId,
+            HttpServletRequest request,
+            @RequestParam(required = false) UUID userId,
             @RequestParam UUID productId,
             @RequestParam BigDecimal minimum,
             @RequestParam @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate date
     ) {
-        dashboard.setThreshold(userId, productId, minimum);
-        return "redirect:/dashboard?userId=" + userId + "&date=" + date;
+        UUID ownerId = owner(request, userId);
+        dashboard.setThreshold(ownerId, productId, minimum);
+        return "redirect:/dashboard?userId=" + ownerId + "&date=" + date;
+    }
+
+    private static UUID owner(HttpServletRequest request, UUID requested) {
+        Object value = request.getAttribute(OwnerSessionFilter.OWNER_ID);
+        if (!(value instanceof UUID ownerId)) {
+            throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "Sign in is required.");
+        }
+        if (requested != null && !requested.equals(ownerId)) {
+            throw new ResponseStatusException(HttpStatus.FORBIDDEN, "That user is not the signed-in owner.");
+        }
+        return ownerId;
     }
 
     @ExceptionHandler(BusinessAccessDeniedException.class)

@@ -75,7 +75,7 @@ public class WhatsAppIngress {
         JsonNode statuses = value.path("statuses");
         if (statuses.isArray() && !statuses.isEmpty()) {
             String statusId = "status:" + statuses.get(0).path("id").asText();
-            return store(null, null, statusId, null, null, InboundStatus.STATUS_CALLBACK, 200);
+            return store(null, null, statusId, null, null, null, null, InboundStatus.STATUS_CALLBACK, 200);
         }
         return new WebhookResult(200, null);
     }
@@ -99,15 +99,18 @@ public class WhatsAppIngress {
     private WebhookResult storeMessage(JsonNode message) {
         String messageId = text(message, "id");
         String phone = text(message, "from");
-        String body = message.path("text").path("body").asText(null);
+        JsonNode media = media(message);
+        String body = textBody(message, media);
+        String mediaId = media == null ? null : text(media, "id");
+        String mediaType = media == null ? null : text(media, "mime_type");
         if (messageId == null) {
             return new WebhookResult(400, null);
         }
         WhatsAppSender sender = phone == null ? null : senders.findByPhone(phone).orElse(null);
         if (sender == null) {
-            return store(null, null, messageId, phone, body, InboundStatus.REJECTED, 403);
+            return store(null, null, messageId, phone, body, mediaId, mediaType, InboundStatus.REJECTED, 403);
         }
-        return store(sender.getBusinessId(), sender.getUserId(), messageId, phone, body, InboundStatus.STORED, 200);
+        return store(sender.getBusinessId(), sender.getUserId(), messageId, phone, body, mediaId, mediaType, InboundStatus.STORED, 200);
     }
 
     private WebhookResult store(
@@ -116,6 +119,8 @@ public class WhatsAppIngress {
             String messageId,
             String phone,
             String body,
+            String mediaId,
+            String mediaType,
             InboundStatus status,
             int httpStatus
     ) {
@@ -124,7 +129,7 @@ public class WhatsAppIngress {
             int code = existing.getStatus() == InboundStatus.REJECTED ? 403 : 200;
             return new WebhookResult(code, existing.getId());
         }
-        InboundMessage saved = messages.save(new InboundMessage(
+        InboundMessage saved = new InboundMessage(
                 UUID.randomUUID(),
                 businessId,
                 userId,
@@ -132,8 +137,32 @@ public class WhatsAppIngress {
                 phone,
                 body,
                 status
-        ));
+        );
+        saved.attachMedia(mediaId, mediaType);
+        messages.save(saved);
         return new WebhookResult(httpStatus, saved.getId());
+    }
+
+    private static JsonNode media(JsonNode message) {
+        for (String field : new String[] {"audio", "image", "document", "video"}) {
+            JsonNode node = message.get(field);
+            if (node != null && !node.isNull() && text(node, "id") != null) {
+                return node;
+            }
+        }
+        return null;
+    }
+
+    private static String textBody(JsonNode message, JsonNode media) {
+        String body = message.path("text").path("body").asText(null);
+        if (body != null && !body.isBlank()) {
+            return body;
+        }
+        if (media == null) {
+            return null;
+        }
+        String caption = text(media, "caption");
+        return caption;
     }
 
     private boolean signed(String signature, byte[] body) {

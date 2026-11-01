@@ -889,7 +889,11 @@ public class PostingService {
 
     @Transactional(readOnly = true)
     public long customerReceivablePaise(UUID userId, UUID partyId) {
-        UUID businessId = tenants.currentBusinessId(userId);
+        return customerReceivablePaiseForBusiness(tenants.currentBusinessId(userId), partyId);
+    }
+
+    @Transactional(readOnly = true)
+    public long customerReceivablePaiseForBusiness(UUID businessId, UUID partyId) {
         requireParty(businessId, partyId, PartyRole.CUSTOMER);
         return ledger.receivablePaise(businessId, partyId);
     }

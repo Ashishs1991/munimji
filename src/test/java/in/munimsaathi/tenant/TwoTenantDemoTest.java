@@ -23,6 +23,7 @@ import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
 
 import java.math.BigDecimal;
+import java.time.Duration;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.time.LocalTime;
@@ -126,6 +127,14 @@ class TwoTenantDemoTest {
                 .findFirst()
                 .orElseThrow();
         assertThat(cityJob.getBusinessId()).isEqualTo(city.getId());
+
+        tenants.selectBusiness(ownerId, other.getId());
+        Job leased = jobs.findById(cityJob.getId()).orElseThrow();
+        leased.lease("demo", cityReminder.getScheduledAt().plus(Duration.ofMinutes(5)));
+        jobs.saveAndFlush(leased);
+        reminders.dispatch(leased, "demo", cityReminder.getScheduledAt());
+        assertThat(reminderTasks.findById(cityBooks.reminderId()).orElseThrow().getOutcome()).isEqualTo("dashboard");
+        assertThat(posting.customerReceivablePaise(ownerId, otherBooks.agarwal().getId())).isEqualTo(Paise.fromRupees(50));
     }
 
     private void runCityPath(UUID ownerId, Books books) {
@@ -160,7 +169,7 @@ class TwoTenantDemoTest {
         assertThat(locations.businessQuantity(ownerId, books.guptaBox().getId(), books.godown3().getId())).isEqualByComparingTo("2");
         assertThat(posting.customerReceivablePaise(ownerId, books.agarwal().getId())).isEqualTo(Paise.fromRupees(300));
 
-        UUID reminderId = reminders.propose(ownerId, ReminderKind.OWNER_REMINDER, books.agarwal().getId(), null, null, LocalDate.of(2099, 11, 17), LocalTime.of(10, 0), "city reminder", false, null, true);
+        UUID reminderId = reminders.propose(ownerId, ReminderKind.OWNER_REMINDER, books.agarwal().getId(), null, null, LocalDate.of(2099, 11, 17), LocalTime.of(10, 0), "city reminder", false, null, false);
         reminders.approve(ownerId, reminderId);
         books.reminder(reminderId);
     }

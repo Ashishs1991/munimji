@@ -14,9 +14,12 @@ import java.util.Map;
 public class MetaLanguageModel implements LanguageModel {
 
     static final String INSTRUCTIONS = """
-            Return one JSON object with keys intent, party_name, product_name, quantity, unit, amount_paise, location_code, and requested_tools.
-            intent is "sale" or null. quantity is a decimal string or null. Leave a field null when the message does not state it.
-            Do not convert boxes into pieces. requested_tools must be an empty array unless the owner asked for an e-way bill.
+            Return one JSON object with keys intent, party_name, product_name, quantity, unit, amount_paise, location_code, reminder_date, reminder_time, lines, and requested_tools.
+            intent is sale, receive, purchase, balance, locate, reminder, or null. quantity is a decimal string or null. Leave a field null when the message does not state it.
+            lines is an array of product_name, quantity, unit, and amount_paise when the owner names more than one item. A single item uses the top-level fields.
+            reminder_date is yyyy-mm-dd and reminder_time is HH:mm only when the owner stated them.
+            Do not convert boxes into pieces. Do not invent quantity, price, godown, tax, or a sending time.
+            requested_tools must be an empty array unless the owner asked for an e-way bill.
             When the owner asks for an e-way bill, requested_tools may contain only prepare_eway_bill, plus the invoice and the transport and tax fields the owner stated.
             Leave tax, GSTIN, HSN, distance, and transport null when the owner did not state them.
             You cannot approve, post stock, post money, send a message, or submit a document.

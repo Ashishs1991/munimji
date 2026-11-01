@@ -2,6 +2,7 @@ package in.munimsaathi.eway;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import in.munimsaathi.PostgresSupport;
+import in.munimsaathi.config.OwnerTokens;
 import in.munimsaathi.catalog.CatalogService;
 import in.munimsaathi.catalog.Party;
 import in.munimsaathi.catalog.PartyBook;
@@ -34,6 +35,7 @@ import org.springframework.test.web.servlet.MockMvc;
 import java.math.BigDecimal;
 import java.time.Instant;
 import java.time.LocalDate;
+import java.time.temporal.ChronoUnit;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -65,6 +67,7 @@ class EwayBookTest {
     @DynamicPropertySource
     static void postgres(DynamicPropertyRegistry registry) {
         PostgresSupport.register(registry);
+        registry.add("munim.supabase.jwt-secret", () -> "test-owner-secret");
         registry.add("munim.eway.enabled", () -> "true");
         registry.add("munim.eway.environment", () -> "sandbox");
         registry.add("munim.eway.base-url", () -> "https://eway.example");
@@ -153,7 +156,13 @@ class EwayBookTest {
         verify(gateway, times(1)).generate(anyString());
         verify(gateway, never()).lookup(anyString(), anyString());
 
+        mockMvc.perform(post("/api/invoices/" + saleId + "/eway-draft")
+                        .param("userId", shop.userId().toString())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(mapper.writeValueAsString(details("UP80AB1234"))))
+                .andExpect(status().isUnauthorized());
         String body = mockMvc.perform(post("/api/invoices/" + saleId + "/eway-draft")
+                        .header("Authorization", "Bearer " + OwnerTokens.sign("test-owner-secret", shop.userId(), Instant.now().plus(1, ChronoUnit.HOURS)))
                         .param("userId", shop.userId().toString())
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(mapper.writeValueAsString(details("UP80AB1234"))))

@@ -97,8 +97,8 @@ public class CatalogService {
     public QuantityConversion convert(UUID userId, UUID productId, BigDecimal displayQuantity, String unitLabel) {
         UUID businessId = tenants.currentBusinessId(userId);
         Product product = requireProduct(businessId, productId);
-        if (displayQuantity == null) {
-            throw new IllegalArgumentException("Quantity is required.");
+        if (displayQuantity == null || displayQuantity.signum() <= 0) {
+            throw new IllegalArgumentException("Quantity must be greater than zero.");
         }
         ProductUnit unit = units.findByProductIdAndUnitLabel(product.getId(), Names.normalize(unitLabel))
                 .orElseThrow(() -> new UnknownUnitException(unitLabel));

@@ -103,6 +103,10 @@ class HistoricalImportTest {
         assertThat(batches.findById(second).orElseThrow().getOpeningPieces()).isEqualByComparingTo("99");
         assertThat(counts.balance(shop.userId(), shop.productId(), shop.godownId())).isEqualByComparingTo("10");
         assertThat(posting.customerReceivablePaise(shop.userId(), shop.customerId())).isEqualTo(Paise.fromRupees(5000));
+
+        imports.activate(shop.userId(), second, shop.godownId(), DAY, AT);
+        assertThat(counts.balance(shop.userId(), shop.productId(), shop.godownId())).isEqualByComparingTo("10");
+        assertThat(posting.customerReceivablePaise(shop.userId(), shop.customerId())).isEqualTo(Paise.fromRupees(5000));
     }
 
     @Test

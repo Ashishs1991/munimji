@@ -1,6 +1,7 @@
 package in.munimsaathi.dashboard;
 
 import in.munimsaathi.PostgresSupport;
+import in.munimsaathi.config.OwnerTokens;
 import in.munimsaathi.catalog.CatalogService;
 import in.munimsaathi.catalog.Party;
 import in.munimsaathi.catalog.PartyBook;
@@ -29,6 +30,7 @@ import org.springframework.test.web.servlet.MockMvc;
 import java.math.BigDecimal;
 import java.time.Instant;
 import java.time.LocalDate;
+import java.time.temporal.ChronoUnit;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -52,6 +54,7 @@ class DashboardTest {
     @DynamicPropertySource
     static void postgres(DynamicPropertyRegistry registry) {
         PostgresSupport.register(registry);
+        registry.add("munim.supabase.jwt-secret", () -> "test-owner-secret");
     }
 
     @Autowired
@@ -161,14 +164,25 @@ class DashboardTest {
         assertThat(alerts.countByBusinessIdAndProductId(shop.businessId(), shop.productId())).isEqualTo(1);
 
         String page = "/dashboard?userId=" + shop.userId() + "&date=2026-08-01";
+        mockMvc.perform(get("/dashboard").param("userId", shop.userId().toString()).param("date", "2026-08-01"))
+                .andExpect(status().isUnauthorized());
+        mockMvc.perform(get("/dashboard")
+                        .header("Authorization", bearer(shop.userId()))
+                        .param("userId", UUID.randomUUID().toString())
+                        .param("date", "2026-08-01"))
+                .andExpect(status().isForbidden());
         mockMvc.perform(post("/dashboard/threshold")
+                        .header("Authorization", bearer(shop.userId()))
                         .param("userId", shop.userId().toString())
                         .param("productId", shop.productId().toString())
                         .param("minimum", "45")
                         .param("date", "2026-08-01"))
                 .andExpect(status().is3xxRedirection())
                 .andExpect(redirectedUrl(page));
-        mockMvc.perform(get("/dashboard").param("userId", shop.userId().toString()).param("date", "2026-08-01"))
+        mockMvc.perform(get("/dashboard")
+                        .header("Authorization", bearer(shop.userId()))
+                        .param("userId", shop.userId().toString())
+                        .param("date", "2026-08-01"))
                 .andExpect(status().isOk())
                 .andExpect(content().string(containsString("600.00")))
                 .andExpect(content().string(containsString("1000.00")))
@@ -204,6 +218,10 @@ class DashboardTest {
         Overview otherBooks = dashboard.overview(shop.userId(), DAY);
         assertThat(otherBooks.businessName()).isEqualTo("Other House");
         assertThat(otherBooks.stock()).isEmpty();
+    }
+
+    private static String bearer(UUID userId) {
+        return "Bearer " + OwnerTokens.sign("test-owner-secret", userId, Instant.now().plus(1, ChronoUnit.HOURS));
     }
 
     private static String row(Overview overview, String productName) {

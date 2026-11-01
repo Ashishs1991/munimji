@@ -1,6 +1,8 @@
 # E-way connector
 
-Milestone 23. The owner can ask for an e-way bill. The assistant prepares a draft from the posted invoice and the fields the owner stated. A bill number is stored only after the government portal accepts the submission.
+Milestone 23 is an unfinished adapter. It stays disabled (`EWAY_ENABLED` defaults to false). Do not describe it as a verified government submission.
+
+The owner can ask for an e-way bill. The assistant prepares a draft from the posted invoice and the fields the owner stated. A bill number is stored only after a scripted provider response contains the official fields. Live NIC encryption and a real portal check are not done.
 
 ## What this covers
 
@@ -30,4 +32,4 @@ The tests use a scripted portal. They do not create a statutory e-way bill.
 
 ## Still open
 
-Live NIC also encrypts the Base64 payload: the auth data with the portal public key, and the bill data with the session key (`sek`). This build records the provider JSON and does not mark a bill generated on its own. Set `EWAY_ENABLED` only after that encryption and real credentials are in place. Tally remains undecided.
+This connector is incomplete. Live NIC encrypts the Base64 payload: the auth data with the portal public key, and the bill data with the session key (`sek`). This build does not do that encryption and has not been verified against the portal. Leave `EWAY_ENABLED` false. A WhatsApp reply names the saved draft id and does not submit it. Tally remains undecided.

@@ -13,6 +13,11 @@ import in.munimsaathi.eway.EwayBook;
 import in.munimsaathi.eway.EwayDetails;
 import in.munimsaathi.eway.EwayParty;
 import in.munimsaathi.eway.EwayTax;
+import in.munimsaathi.ledger.PostingService;
+import in.munimsaathi.location.LocationBook;
+import in.munimsaathi.location.Place;
+import in.munimsaathi.reminder.ReminderBook;
+import in.munimsaathi.reminder.ReminderKind;
 import in.munimsaathi.tenant.Godown;
 import in.munimsaathi.tenant.GodownRepository;
 import in.munimsaathi.tenant.TenantContext;
@@ -22,6 +27,8 @@ import org.springframework.transaction.annotation.Transactional;
 import java.math.BigDecimal;
 import java.time.Instant;
 import java.time.LocalDate;
+import java.time.LocalTime;
+import java.time.format.DateTimeParseException;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
@@ -50,6 +57,9 @@ public class CommandInterpreter {
     private final GodownRepository godowns;
     private final DraftBook drafts;
     private final EwayBook eway;
+    private final PostingService posting;
+    private final LocationBook locations;
+    private final ReminderBook reminders;
 
     public CommandInterpreter(
             LanguageModel model,
@@ -59,7 +69,10 @@ public class CommandInterpreter {
             CatalogService catalog,
             GodownRepository godowns,
             DraftBook drafts,
-            EwayBook eway
+            EwayBook eway,
+            PostingService posting,
+            LocationBook locations,
+            ReminderBook reminders
     ) {
         this.model = model;
         this.mapper = mapper;
@@ -69,10 +82,18 @@ public class CommandInterpreter {
         this.godowns = godowns;
         this.drafts = drafts;
         this.eway = eway;
+        this.posting = posting;
+        this.locations = locations;
+        this.reminders = reminders;
     }
 
     @Transactional
     public InterpretationOutcome interpret(UUID userId, String text, LocalDate occurredOn, Instant occurredAt) {
+        return interpret(userId, text, null, occurredOn, occurredAt);
+    }
+
+    @Transactional
+    public InterpretationOutcome interpret(UUID userId, String text, UUID draftId, LocalDate occurredOn, Instant occurredAt) {
         if (text == null || text.isBlank()) {
             throw new IllegalArgumentException("A command is required.");
         }
@@ -84,7 +105,7 @@ public class CommandInterpreter {
         } catch (Exception exception) {
             throw new IllegalArgumentException("The model reply was not readable.", exception);
         }
-        return apply(userId, null, reply, occurredOn, occurredAt);
+        return apply(userId, draftId, reply, occurredOn, occurredAt);
     }
 
     @Transactional
@@ -114,21 +135,79 @@ public class CommandInterpreter {
         List<String> refused = refusedTools(reply);
         UUID ewayDraftId = ewayDraft(userId, reply);
         String intent = text(reply, "intent");
-        String action = "sale".equalsIgnoreCase(intent) ? "sale" : null;
-        UUID customerId = party(userId, text(reply, "party_name"));
+        String normalized = intent == null ? "" : intent.toLowerCase(Locale.ROOT);
+        String action = switch (normalized) {
+            case "sale" -> "sale";
+            case "receive", "purchase" -> "receive";
+            default -> null;
+        };
+        boolean supplier = "receive".equals(action);
+        UUID customerId = party(userId, text(reply, "party_name"), supplier);
         UUID productId = product(userId, text(reply, "product_name"));
         UUID locationId = location(userId, text(reply, "location_code"));
         BigDecimal quantity = quantity(reply.get("quantity"));
         String unit = text(reply, "unit");
         Long amount = amount(reply.get("amount_paise"));
+        String answer = answerFor(userId, normalized, customerId, productId, reply);
+        if (answer != null) {
+            return new InterpretationOutcome(null, refused, ewayDraftId, answer);
+        }
         if (draftId == null && action == null && customerId == null && productId == null && locationId == null
                 && quantity == null && unit == null && amount == null) {
-            return new InterpretationOutcome(null, refused, ewayDraftId);
+            return new InterpretationOutcome(null, refused, ewayDraftId, null);
         }
         DraftProposal draft = draftId == null
                 ? drafts.propose(userId, action, customerId, productId, locationId, quantity, unit, amount, occurredOn, occurredAt)
-                : drafts.edit(userId, draftId, action, customerId, productId, locationId, quantity, unit, amount, occurredOn, occurredAt);
-        return new InterpretationOutcome(draft, refused, ewayDraftId);
+                : drafts.continueDraft(userId, draftId, action, customerId, productId, locationId, quantity, unit, amount, occurredOn, occurredAt);
+        return new InterpretationOutcome(draft, refused, ewayDraftId, null);
+    }
+
+    private String answerFor(UUID userId, String intent, UUID partyId, UUID productId, JsonNode reply) {
+        if ("balance".equals(intent)) {
+            if (partyId == null) {
+                return "Which party? I will not guess the balance.";
+            }
+            long paise = posting.customerReceivablePaise(userId, partyId);
+            return "Receivable is ₹" + BigDecimal.valueOf(paise, 2).toPlainString() + ".";
+        }
+        if ("locate".equals(intent)) {
+            if (productId == null) {
+                return "Which product? I will not guess the godown.";
+            }
+            List<Place> places = locations.locate(userId, productId);
+            if (places.isEmpty()) {
+                return "No location is remembered for that product.";
+            }
+            StringBuilder text = new StringBuilder();
+            for (Place place : places) {
+                Godown godown = godowns.findById(place.locationId()).orElse(null);
+                String name = godown == null ? "unknown godown" : godown.getName();
+                text.append(name).append(place.currentlyStocked() ? " has stock. " : " was last noted. ");
+            }
+            return text.toString().trim();
+        }
+        if ("reminder".equals(intent)) {
+            LocalDate date = localDate(text(reply, "reminder_date"));
+            LocalTime time = localTime(text(reply, "reminder_time"));
+            if (date == null || time == null) {
+                return "Ask for the sending time.";
+            }
+            UUID taskId = reminders.propose(
+                    userId,
+                    ReminderKind.OWNER_REMINDER,
+                    partyId,
+                    null,
+                    null,
+                    date,
+                    time,
+                    "owner reminder",
+                    false,
+                    null,
+                    true
+            );
+            return "Reminder " + taskId + " is waiting for approval. It is not sent yet.";
+        }
+        return null;
     }
 
     private List<String> refusedTools(JsonNode reply) {
@@ -232,14 +311,38 @@ public class CommandInterpreter {
         return value.intValue();
     }
 
-    private UUID party(UUID userId, String name) {
+    private UUID party(UUID userId, String name, boolean supplier) {
         if (name == null) {
             return null;
         }
         List<Party> matches = parties.findByName(userId, name).stream()
-                .filter(party -> party.getRole() == PartyRole.CUSTOMER || party.getRole() == PartyRole.BOTH)
+                .filter(party -> supplier
+                        ? party.getRole() == PartyRole.SUPPLIER || party.getRole() == PartyRole.BOTH
+                        : party.getRole() == PartyRole.CUSTOMER || party.getRole() == PartyRole.BOTH)
                 .toList();
         return matches.size() == 1 ? matches.get(0).getId() : null;
+    }
+
+    private static LocalDate localDate(String value) {
+        if (value == null) {
+            return null;
+        }
+        try {
+            return LocalDate.parse(value);
+        } catch (DateTimeParseException exception) {
+            return null;
+        }
+    }
+
+    private static LocalTime localTime(String value) {
+        if (value == null) {
+            return null;
+        }
+        try {
+            return LocalTime.parse(value);
+        } catch (DateTimeParseException exception) {
+            return null;
+        }
     }
 
     private UUID product(UUID userId, String name) {

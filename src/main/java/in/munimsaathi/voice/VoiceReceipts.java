@@ -89,7 +89,7 @@ public class VoiceReceipts {
             LocalDate occurredOn,
             Instant occurredAt
     ) {
-        String type = mediaType == null ? "" : mediaType.toLowerCase(Locale.ROOT);
+        String type = mediaType == null ? "" : mediaType.toLowerCase(Locale.ROOT).split(";", 2)[0].trim();
         if (!AUDIO.contains(type)) {
             throw new IllegalArgumentException("Attach a voice note.");
         }
@@ -109,7 +109,7 @@ public class VoiceReceipts {
         UUID customerId = party(userId, text(reply, "party_name"));
         UUID locationId = location(userId, text(reply, "location_code"));
         String action = "sale".equalsIgnoreCase(text(reply, "intent")) ? "sale" : null;
-        List<DraftLineSpec> lines = lines(userId, reply.get("lines"));
+        List<DraftLineSpec> lines = lines(userId, reply);
         DraftProposal draft = drafts.proposeLines(userId, action, customerId, locationId, lines, occurredOn, occurredAt);
         UUID businessId = tenants.currentBusinessId(userId);
         Evidence stored = evidence.save(new Evidence(
@@ -125,29 +125,34 @@ public class VoiceReceipts {
         return new VoiceCapture(draft, stored.getId(), transcript);
     }
 
-    private List<DraftLineSpec> lines(UUID userId, JsonNode array) {
-        if (array == null || !array.isArray() || array.isEmpty()) {
-            throw new IllegalArgumentException("A voice receipt needs every line, including unresolved ones.");
-        }
-        List<DraftLineSpec> lines = new ArrayList<>();
-        for (JsonNode node : array) {
-            UUID productId = product(userId, text(node, "product_name"));
-            BigDecimal quantity = quantity(node.get("quantity"));
-            String unit = text(node, "unit");
-            Long amount = amount(node.get("amount_paise"));
-            String unresolved = null;
-            if (productId == null) {
-                unresolved = "product";
-            } else if (quantity == null) {
-                unresolved = "quantity";
-            } else if (unit == null) {
-                unresolved = "unit";
-            } else if (!convertible(productId, quantity, unit)) {
-                unresolved = "unit";
+    private List<DraftLineSpec> lines(UUID userId, JsonNode reply) {
+        JsonNode array = reply.get("lines");
+        if (array != null && array.isArray() && !array.isEmpty()) {
+            List<DraftLineSpec> lines = new ArrayList<>();
+            for (JsonNode node : array) {
+                lines.add(oneLine(userId, node));
             }
-            lines.add(new DraftLineSpec(productId, quantity, unit, amount, unresolved));
+            return lines;
         }
-        return lines;
+        return List.of(oneLine(userId, reply));
+    }
+
+    private DraftLineSpec oneLine(UUID userId, JsonNode node) {
+        UUID productId = product(userId, text(node, "product_name"));
+        BigDecimal quantity = quantity(node.get("quantity"));
+        String unit = text(node, "unit");
+        Long amount = amount(node.get("amount_paise"));
+        String unresolved = null;
+        if (productId == null) {
+            unresolved = "product";
+        } else if (quantity == null) {
+            unresolved = "quantity";
+        } else if (unit == null) {
+            unresolved = "unit";
+        } else if (!convertible(productId, quantity, unit)) {
+            unresolved = "unit";
+        }
+        return new DraftLineSpec(productId, quantity, unit, amount, unresolved);
     }
 
     private boolean convertible(UUID productId, BigDecimal quantity, String unit) {

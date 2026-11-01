@@ -81,4 +81,12 @@ public class DraftLine {
     public String getUnresolved() {
         return unresolved;
     }
+
+    void replace(UUID productId, BigDecimal displayQuantity, String unitLabel, Long amountPaise, String unresolved) {
+        this.productId = productId;
+        this.displayQuantity = displayQuantity;
+        this.unitLabel = unitLabel;
+        this.amountPaise = amountPaise;
+        this.unresolved = unresolved;
+    }
 }

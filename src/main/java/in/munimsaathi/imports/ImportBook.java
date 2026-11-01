@@ -19,8 +19,10 @@ import java.security.NoSuchAlgorithmException;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.HexFormat;
 import java.util.List;
+import java.util.Set;
 import java.util.UUID;
 
 @Service
@@ -150,17 +152,29 @@ public class ImportBook {
         if (!operations.existsById(stockOperation)) {
             List<ImportRow> opening = rows.findByImportIdOrderByRowNumberAsc(importId).stream()
                     .filter(row -> "opening_stock".equals(row.getRowClass()))
+                    .filter(row -> row.getStatus() == ImportRowStatus.MAPPED)
+                    .filter(row -> !duplicateSource(businessId, importId, row.getSourceId()))
                     .toList();
-            if (!opening.isEmpty()) {
+            Set<String> seenStock = new HashSet<>();
+            List<ImportRow> unique = opening.stream()
+                    .filter(row -> row.getSourceId() != null && seenStock.add(row.getSourceId()))
+                    .toList();
+            if (!unique.isEmpty()) {
                 UUID sessionId = counts.start(userId, godownId, at, "import");
-                for (ImportRow row : opening) {
+                for (ImportRow row : unique) {
                     counts.propose(userId, sessionId, row.getProductId(), row.getQuantity(), "piece", null);
                 }
                 counts.confirm(userId, sessionId, stockOperation);
             }
         }
+        Set<String> seenReceivables = new HashSet<>();
         for (ImportRow row : rows.findByImportIdOrderByRowNumberAsc(importId)) {
-            if (!"opening_receivable".equals(row.getRowClass()) || row.getAmountPaise() == null) {
+            if (!"opening_receivable".equals(row.getRowClass())
+                    || row.getStatus() != ImportRowStatus.MAPPED
+                    || row.getAmountPaise() == null
+                    || row.getSourceId() == null
+                    || !seenReceivables.add(row.getSourceId())
+                    || duplicateSource(businessId, importId, row.getSourceId())) {
                 continue;
             }
             UUID moneyOperation = UUID.nameUUIDFromBytes(
@@ -169,6 +183,10 @@ public class ImportBook {
             posting.recordOpeningReceivable(userId, moneyOperation, row.getPartyId(), row.getAmountPaise(), day, at);
         }
         batch.activate();
+    }
+
+    private boolean duplicateSource(UUID businessId, UUID importId, String sourceId) {
+        return sourceId != null && rows.alreadyActive(businessId, importId, sourceId);
     }
 
     private UUID product(UUID userId, String name) {

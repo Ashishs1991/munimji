@@ -49,6 +49,32 @@ public class WhatsAppSessionClient implements SessionReply {
         return read(body);
     }
 
+    @Override
+    public byte[] download(String mediaId) {
+        MunimProperties.Whatsapp whatsapp = properties.whatsapp();
+        if (whatsapp == null || blank(whatsapp.accessToken()) || blank(whatsapp.graphApiVersion()) || blank(mediaId)) {
+            return null;
+        }
+        try {
+            String lookup = client.get()
+                    .uri("https://graph.facebook.com/" + whatsapp.graphApiVersion() + "/" + mediaId)
+                    .header("Authorization", "Bearer " + whatsapp.accessToken())
+                    .retrieve()
+                    .body(String.class);
+            String url = mapper.readTree(lookup).path("url").asText(null);
+            if (url == null || url.isBlank()) {
+                return null;
+            }
+            return client.get()
+                    .uri(url)
+                    .header("Authorization", "Bearer " + whatsapp.accessToken())
+                    .retrieve()
+                    .body(byte[].class);
+        } catch (Exception exception) {
+            return null;
+        }
+    }
+
     private ProviderReceipt read(String body) {
         try {
             JsonNode root = mapper.readTree(body);

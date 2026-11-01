@@ -162,7 +162,114 @@ public class DraftBook {
             throw new IllegalArgumentException("A posted proposal cannot be edited.");
         }
         fill(draft, action, customerId, productId, locationId, quantity, unit, amountPaise, occurredOn, occurredAt);
+        rewriteLines(draft);
         return view(draft);
+    }
+
+    @Transactional
+    public DraftProposal continueDraft(
+            UUID userId,
+            UUID draftId,
+            String action,
+            UUID customerId,
+            UUID productId,
+            UUID locationId,
+            BigDecimal quantity,
+            String unit,
+            Long amountPaise,
+            LocalDate occurredOn,
+            Instant occurredAt
+    ) {
+        Draft draft = requireDraft(tenants.currentBusinessId(userId), draftId);
+        if (draft.getStatus() == DraftStatus.POSTED) {
+            throw new IllegalArgumentException("A posted proposal cannot be edited.");
+        }
+        List<DraftLine> existing = draftLines.findByDraftIdOrderByLineNumberAsc(draft.getId());
+        boolean lineChange = productId != null || quantity != null || unit != null || amountPaise != null;
+        if (!existing.isEmpty()) {
+            if (lineChange && existing.size() == 1) {
+                DraftLine line = existing.get(0);
+                UUID nextProduct = productId != null ? productId : line.getProductId();
+                BigDecimal nextQuantity = quantity != null ? quantity : line.getDisplayQuantity();
+                String nextUnit = unit != null ? unit : line.getUnitLabel();
+                Long nextAmount = amountPaise != null ? amountPaise : line.getAmountPaise();
+                String unresolved = nextProduct == null ? "product" : nextQuantity == null ? "quantity" : nextUnit == null ? "unit" : null;
+                line.replace(nextProduct, nextQuantity, nextUnit, nextAmount, unresolved);
+            }
+            keepLines(draft, action, customerId, locationId, occurredOn, occurredAt);
+            return view(draft);
+        }
+        fill(
+                draft,
+                action != null ? action : draft.getKind(),
+                customerId != null ? customerId : draft.getCustomerId(),
+                productId != null ? productId : draft.getProductId(),
+                locationId != null ? locationId : draft.getLocationId(),
+                quantity != null ? quantity : draft.getDisplayQuantity(),
+                unit != null ? unit : draft.getUnitLabel(),
+                amountPaise != null ? amountPaise : draft.getAmountPaise(),
+                draft.getOccurredOn() != null ? draft.getOccurredOn() : occurredOn,
+                draft.getOccurredAt() != null ? draft.getOccurredAt() : occurredAt
+        );
+        return view(draft);
+    }
+
+    private void keepLines(
+            Draft draft,
+            String action,
+            UUID customerId,
+            UUID locationId,
+            LocalDate occurredOn,
+            Instant occurredAt
+    ) {
+        String kind = action != null ? actionKind(action) : draft.getKind();
+        UUID customer = customerId != null ? customerId : draft.getCustomerId();
+        UUID location = locationId != null ? locationId : draft.getLocationId();
+        LocalDate day = draft.getOccurredOn() != null ? draft.getOccurredOn() : occurredOn;
+        Instant at = draft.getOccurredAt() != null ? draft.getOccurredAt() : occurredAt;
+        List<DraftLine> lines = draftLines.findByDraftIdOrderByLineNumberAsc(draft.getId());
+        List<String> missing = new ArrayList<>();
+        if (kind == null) {
+            missing.add("action");
+        }
+        if (day == null || at == null) {
+            missing.add("date");
+        }
+        if (location == null) {
+            missing.add("location");
+        }
+        if (customer == null) {
+            missing.add("party");
+        }
+        StringBuilder canon = new StringBuilder();
+        for (DraftLine line : lines) {
+            if (line.getUnresolved() != null) {
+                missing.add("line-" + line.getLineNumber());
+            }
+            canon.append(line.getLineNumber())
+                    .append("|").append(text(line.getProductId()))
+                    .append("|").append(line.getDisplayQuantity() == null ? "" : line.getDisplayQuantity().stripTrailingZeros().toPlainString())
+                    .append("|").append(text(line.getUnitLabel()))
+                    .append("|").append(line.getAmountPaise() == null ? "" : line.getAmountPaise())
+                    .append("|").append(text(line.getUnresolved()))
+                    .append(";");
+        }
+        long nextVersion = draft.getVersion() + 1;
+        draft.replace(
+                kind,
+                missing.isEmpty() ? DraftStatus.AWAITING_APPROVAL : DraftStatus.NEEDS_CLARIFICATION,
+                hash(nextVersion, kind, customer, null, location, null, null, null, day, at, canon.toString()),
+                customer,
+                null,
+                location,
+                null,
+                null,
+                null,
+                day,
+                at,
+                String.join(",", missing),
+                Instant.now().plus(2, ChronoUnit.HOURS)
+        );
     }
 
     @Transactional(readOnly = true)
@@ -216,6 +323,9 @@ public class DraftBook {
 
     private UUID post(UUID userId, Draft draft) {
         List<DraftLine> rows = draftLines.findByDraftIdOrderByLineNumberAsc(draft.getId());
+        if ("RECEIPT".equals(draft.getKind())) {
+            return receive(userId, draft, rows);
+        }
         if (!rows.isEmpty()) {
             List<SaleLine> saleLines = new ArrayList<>();
             for (DraftLine row : rows) {
@@ -262,6 +372,62 @@ public class DraftBook {
                 draft.getOccurredOn(),
                 draft.getOccurredAt()
         );
+    }
+
+    private UUID receive(UUID userId, Draft draft, List<DraftLine> rows) {
+        if (rows.isEmpty()) {
+            return posting.receiveGoods(
+                    userId,
+                    draft.getId(),
+                    draft.getCustomerId(),
+                    draft.getProductId(),
+                    draft.getLocationId(),
+                    draft.getDisplayQuantity(),
+                    draft.getUnitLabel(),
+                    draft.getOccurredOn(),
+                    draft.getOccurredAt()
+            );
+        }
+        UUID first = null;
+        for (DraftLine row : rows) {
+            UUID operation = row.getLineNumber() == 1
+                    ? draft.getId()
+                    : UUID.nameUUIDFromBytes((draft.getId() + ":receipt:" + row.getLineNumber()).getBytes(StandardCharsets.UTF_8));
+            UUID documentId = posting.receiveGoods(
+                    userId,
+                    operation,
+                    draft.getCustomerId(),
+                    row.getProductId(),
+                    draft.getLocationId(),
+                    row.getDisplayQuantity(),
+                    row.getUnitLabel(),
+                    draft.getOccurredOn(),
+                    draft.getOccurredAt()
+            );
+            if (first == null) {
+                first = documentId;
+            }
+        }
+        return first;
+    }
+
+    private void rewriteLines(Draft draft) {
+        List<DraftLine> existing = draftLines.findByDraftIdOrderByLineNumberAsc(draft.getId());
+        if (existing.isEmpty()) {
+            return;
+        }
+        draftLines.deleteAll(existing);
+        draftLines.flush();
+        draftLines.save(new DraftLine(
+                UUID.randomUUID(),
+                draft.getId(),
+                1,
+                draft.getProductId(),
+                draft.getDisplayQuantity(),
+                draft.getUnitLabel(),
+                draft.getAmountPaise(),
+                null
+        ));
     }
 
     private void fill(
@@ -317,10 +483,14 @@ public class DraftBook {
         if (action == null || action.isBlank()) {
             return null;
         }
-        if (!SALE.equalsIgnoreCase(action.trim())) {
-            throw new IllegalArgumentException("Unknown action.");
+        String normalized = action.trim();
+        if (SALE.equalsIgnoreCase(normalized)) {
+            return SALE;
         }
-        return SALE;
+        if ("receive".equalsIgnoreCase(normalized) || "purchase".equalsIgnoreCase(normalized) || "RECEIPT".equalsIgnoreCase(normalized)) {
+            return "RECEIPT";
+        }
+        throw new IllegalArgumentException("Unknown action.");
     }
 
     private static List<String> missing(
@@ -347,7 +517,7 @@ public class DraftBook {
         if (customerId == null) {
             missing.add("party");
         }
-        if (amountPaise == null) {
+        if (!"RECEIPT".equals(kind) && amountPaise == null) {
             missing.add("price");
         }
         if (productId == null) {

@@ -85,6 +85,12 @@ class CatalogAndPartyTest {
                 .isInstanceOf(UnknownUnitException.class);
         assertThatThrownBy(() -> catalog.toBaseQuantity(userId, folders.getId(), new BigDecimal("1.5"), "piece"))
                 .isInstanceOf(IndivisibleQuantityException.class);
+        assertThatThrownBy(() -> catalog.toBaseQuantity(userId, folders.getId(), BigDecimal.ZERO, "piece"))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessage("Quantity must be greater than zero.");
+        assertThatThrownBy(() -> catalog.toBaseQuantity(userId, folders.getId(), new BigDecimal("-1"), "piece"))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessage("Quantity must be greater than zero.");
     }
 
     @Test
