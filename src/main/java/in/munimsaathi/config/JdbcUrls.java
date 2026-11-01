@@ -1,7 +1,6 @@
 package in.munimsaathi.config;
 
-import java.net.URI;
-import java.net.URISyntaxException;
+import java.nio.charset.StandardCharsets;
 
 public final class JdbcUrls {
 
@@ -45,41 +44,54 @@ public final class JdbcUrls {
         if (normalized == null || normalized.isBlank() || !normalized.startsWith("jdbc:postgresql://")) {
             return new Parsed(normalized, null, null);
         }
-        String forUri = normalized.substring("jdbc:".length());
-        URI uri;
-        try {
-            uri = new URI(forUri);
-        } catch (URISyntaxException exception) {
+        String rest = normalized.substring("jdbc:postgresql://".length());
+        int at = rest.lastIndexOf('@');
+        if (at <= 0) {
             return new Parsed(normalized, null, null);
         }
-        String userInfo = uri.getUserInfo();
-        if (userInfo == null || userInfo.isBlank()) {
+        String userInfo = rest.substring(0, at);
+        String location = rest.substring(at + 1);
+        if (userInfo.indexOf('/') >= 0 || userInfo.indexOf('?') >= 0 || userInfo.indexOf('#') >= 0
+                || userInfo.indexOf('@') >= 0) {
             return new Parsed(normalized, null, null);
         }
-        String username;
-        String password;
         int separator = userInfo.indexOf(':');
-        if (separator < 0) {
-            username = userInfo;
-            password = null;
-        } else {
-            username = userInfo.substring(0, separator);
-            password = userInfo.substring(separator + 1);
+        if (separator <= 0 || separator == userInfo.length() - 1) {
+            return new Parsed(normalized, null, null);
         }
-        String host = uri.getHost();
-        if (host == null || host.isBlank()) {
-            return new Parsed(normalized, username, password);
+        if (!location.matches("[A-Za-z0-9._-]+:[0-9]+/[^?#]+(\\?[^#]*)?")) {
+            return new Parsed(normalized, null, null);
         }
-        StringBuilder rebuilt = new StringBuilder("jdbc:postgresql://").append(host);
-        if (uri.getPort() > 0) {
-            rebuilt.append(':').append(uri.getPort());
+        String username = decode(userInfo.substring(0, separator));
+        String password = decode(userInfo.substring(separator + 1));
+        if (username == null || username.isBlank() || password == null) {
+            return new Parsed(normalized, null, null);
         }
-        if (uri.getPath() != null) {
-            rebuilt.append(uri.getPath());
+        return new Parsed("jdbc:postgresql://" + location, username, password);
+    }
+
+    private static String decode(String value) {
+        byte[] bytes = new byte[value.length()];
+        int length = 0;
+        for (int index = 0; index < value.length(); index++) {
+            char current = value.charAt(index);
+            if (current == '%') {
+                if (index + 2 >= value.length()) {
+                    return null;
+                }
+                int high = Character.digit(value.charAt(index + 1), 16);
+                int low = Character.digit(value.charAt(index + 2), 16);
+                if (high < 0 || low < 0) {
+                    return null;
+                }
+                bytes[length++] = (byte) ((high << 4) + low);
+                index += 2;
+            } else if (current > 127) {
+                return null;
+            } else {
+                bytes[length++] = (byte) current;
+            }
         }
-        if (uri.getQuery() != null && !uri.getQuery().isBlank()) {
-            rebuilt.append('?').append(uri.getQuery());
-        }
-        return new Parsed(rebuilt.toString(), username, password);
+        return new String(bytes, 0, length, StandardCharsets.UTF_8);
     }
 }

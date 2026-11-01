@@ -32,4 +32,24 @@ class JdbcUrlsTest {
         assertThat(parsed.username()).isEqualTo("postgres");
         assertThat(parsed.password()).isEqualTo("secret");
     }
+
+    @Test
+    void anEncodedPasswordKeepsItsReservedCharacters() {
+        JdbcUrls.Parsed parsed = JdbcUrls.splitCredentials(
+                "postgresql://postgres.project:se%23cr%40et@aws-0-ap-south-1.pooler.supabase.com:5432/postgres?sslmode=require"
+        );
+        assertThat(parsed.jdbcUrl())
+                .isEqualTo("jdbc:postgresql://aws-0-ap-south-1.pooler.supabase.com:5432/postgres?sslmode=require");
+        assertThat(parsed.username()).isEqualTo("postgres.project");
+        assertThat(parsed.password()).isEqualTo("se#cr@et");
+    }
+
+    @Test
+    void aPasswordWithARawHashStaysInsideTheUrl() {
+        String url = "postgresql://postgres:se#cret@db.example.com:5432/postgres";
+        JdbcUrls.Parsed parsed = JdbcUrls.splitCredentials(url);
+        assertThat(parsed.jdbcUrl()).isEqualTo("jdbc:" + url);
+        assertThat(parsed.username()).isNull();
+        assertThat(parsed.password()).isNull();
+    }
 }

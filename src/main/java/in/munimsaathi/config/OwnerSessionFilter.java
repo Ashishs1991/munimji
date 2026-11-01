@@ -9,6 +9,7 @@ import jakarta.servlet.ServletException;
 import jakarta.servlet.http.Cookie;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
+import org.springframework.context.annotation.Lazy;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.ResponseCookie;
 import org.springframework.stereotype.Component;
@@ -32,8 +33,8 @@ public class OwnerSessionFilter extends OncePerRequestFilter {
 
     public OwnerSessionFilter(
             MunimProperties properties,
-            MembershipRepository memberships,
-            BusinessContextRepository contexts
+            @Lazy MembershipRepository memberships,
+            @Lazy BusinessContextRepository contexts
     ) {
         this.properties = properties;
         this.memberships = memberships;
