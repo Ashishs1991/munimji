@@ -356,7 +356,7 @@ public class DraftBook {
                         draft.getKind(),
                         draft.getMissingFields() == null ? "" : draft.getMissingFields(),
                         draft.getVersion(),
-                        draft.getAmountPaise()
+                        draft.getAmountPaise(), draft.getCustomerId()
                 ))
                 .toList();
     }
@@ -440,7 +440,7 @@ public class DraftBook {
         }
     }
 
-    public record OpenDraft(UUID id, String kind, String missing, long version, Long amountPaise) {
+    public record OpenDraft(UUID id, String kind, String missing, long version, Long amountPaise, UUID partyId) {
     }
 
     @Transactional
@@ -488,6 +488,10 @@ public class DraftBook {
     }
 
     private UUID post(UUID userId, Draft draft) {
+        if ("OUTGOING_PAYMENT".equals(draft.getKind())) {
+            return posting.recordOutgoingPayment(userId, draft.getId(), draft.getCustomerId(), draft.getAmountPaise(),
+                    draft.getPaymentMethod(), draft.getCause(), draft.getOccurredOn(), draft.getOccurredAt());
+        }
         if ("PAYMENT".equals(draft.getKind())) {
             if (draft.getAllocatesDocumentId() != null) {
                 return posting.receivePayment(
@@ -707,6 +711,9 @@ public class DraftBook {
         if ("receivable".equalsIgnoreCase(normalized) || "RECEIVABLE".equalsIgnoreCase(normalized) || "standalone_receivable".equalsIgnoreCase(normalized)) {
             return "RECEIVABLE";
         }
+        if ("outgoing_payment".equalsIgnoreCase(normalized)) {
+            return "OUTGOING_PAYMENT";
+        }
         if ("payable".equalsIgnoreCase(normalized) || "PAYABLE".equalsIgnoreCase(normalized) || "supplier_payable".equalsIgnoreCase(normalized)) {
             return "PAYABLE";
         }
@@ -776,8 +783,11 @@ public class DraftBook {
         if (amountPaise == null) {
             missing.add("amount");
         }
-        if ("PAYMENT".equals(kind) && paymentMethod == null) {
+        if (("PAYMENT".equals(kind) || "OUTGOING_PAYMENT".equals(kind)) && paymentMethod == null) {
             missing.add("payment_method");
+        }
+        if ("OUTGOING_PAYMENT".equals(kind) && !List.of("bill_payment", "advance", "loan").contains(cause == null ? "" : cause)) {
+            missing.add("payment_purpose");
         }
         if (("RECEIVABLE".equals(kind) || "PAYABLE".equals(kind)) && cause == null) {
             missing.add("cause");

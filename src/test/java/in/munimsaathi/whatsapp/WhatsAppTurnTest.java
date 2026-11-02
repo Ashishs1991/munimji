@@ -136,7 +136,7 @@ class WhatsAppTurnTest {
 
         assertThat(messages.findByMessageId("wamid.turn").orElseThrow().getStatus()).isEqualTo(InboundStatus.REPLIED);
         verify(model, times(1)).complete("ek box");
-        verify(session).sendText(PHONE, "Namaste. Tell me what was received, sold, or paid.");
+        verify(session).sendText(PHONE, "Namaste! Maal aaya, bika, paise mile ya diye? Bataiye.");
     }
 
     @Test
@@ -149,7 +149,7 @@ class WhatsAppTurnTest {
         turn.openStored();
 
         verify(model, never()).complete(anyString());
-        verify(session).sendText(PHONE, "Yes approves only one current proposal.");
+        verify(session).sendText(PHONE, "Abhi kis entry ko confirm karna hai? Ek saaf pending entry honi chahiye.");
         assertThat(messages.findByMessageId("wamid.yes").orElseThrow().getStatus()).isEqualTo(InboundStatus.REPLIED);
     }
 
@@ -212,8 +212,8 @@ class WhatsAppTurnTest {
         ingress.receive(sign(message("wamid.follow-2", phone, "Godown 1")), message("wamid.follow-2", phone, "Godown 1"));
         turn.openStored();
 
-        verify(session).sendText(eq(phone), org.mockito.ArgumentMatchers.contains("Still need the godown"));
-        verify(session).sendText(eq(phone), org.mockito.ArgumentMatchers.contains("Reply Yes to post this draft only"));
+        verify(session).sendText(eq(phone), org.mockito.ArgumentMatchers.contains("Abhi yeh batana hai: godown"));
+        verify(session).sendText(eq(phone), org.mockito.ArgumentMatchers.contains("Is entry ko confirm karne ke liye Haan ya Yes bhejiye"));
         verify(session, times(2)).sendText(eq(phone), org.mockito.ArgumentMatchers.contains("Agarwal"));
         verify(session, times(2)).sendText(eq(phone), org.mockito.ArgumentMatchers.contains("Office folder"));
         verify(session).sendText(eq(phone), org.mockito.ArgumentMatchers.contains("Godown 1"));
@@ -341,7 +341,7 @@ class WhatsAppTurnTest {
 
         turn.openStored();
 
-        verify(session).sendText(eq(phone), org.mockito.ArgumentMatchers.contains("Reminder approved"));
+        verify(session).sendText(eq(phone), org.mockito.ArgumentMatchers.contains("Reminder confirm ho gaya"));
         assertThat(dashboard.overview(shelf.userId(), LocalDate.of(2026, 8, 1)).ownerReminders())
                 .anyMatch(text -> text.contains("SCHEDULED") && text.contains("owner reminder"));
         Job job = jobs.findAll().stream()
@@ -417,9 +417,9 @@ class WhatsAppTurnTest {
           """);
         when(session.sendText(eq(phone),anyString())).thenReturn(new ProviderReceipt("accepted","money-effects-reply"));
         turn.openStored();
-        verify(session).sendText(eq(phone),org.mockito.ArgumentMatchers.contains("Record money received from Agarwal"));
-        verify(session).sendText(eq(phone),org.mockito.ArgumentMatchers.contains("Will reduce their receivable by ₹1000.00"));
-        verify(session).sendText(eq(phone),org.mockito.ArgumentMatchers.contains("Stock will be unchanged"));
+        verify(session).sendText(eq(phone),org.mockito.ArgumentMatchers.contains("Paise mile hain — Agarwal"));
+        verify(session).sendText(eq(phone),org.mockito.ArgumentMatchers.contains("Unka bakaya itna ghatega: ₹1000.00"));
+        verify(session).sendText(eq(phone),org.mockito.ArgumentMatchers.contains("Stock mein koi badlav nahi hoga"));
         assertThat(counts.balance(sh.userId(),sh.productId(),sh.godownId())).isEqualByComparingTo("50");
     }
     @Test void loanAndPayableConfirmationsSayWhoOwesWhom() {
@@ -432,8 +432,8 @@ class WhatsAppTurnTest {
             when(model.complete(instruction)).thenReturn("{\"turn\":\"new_action\",\"action\":\""+(payable?"supplier_payable":"standalone_receivable")+"\",\"party_name\":\""+name+"\",\"amount_paise\":100000,\"cause\":\"new\"}");
             when(session.sendText(eq(phone),anyString())).thenReturn(new ProviderReceipt("accepted","direction-reply"));
             turn.openStored();
-            verify(session).sendText(eq(phone),org.mockito.ArgumentMatchers.contains(payable?"you owe Bags Co ₹1000.00":"Agarwal owes you ₹1000.00"));
-            verify(session).sendText(eq(phone),org.mockito.ArgumentMatchers.contains("Stock will be unchanged"));
+            verify(session).sendText(eq(phone),org.mockito.ArgumentMatchers.contains(payable?"aapko dene hain — Bags Co ₹1000.00":"Agarwal se aapko lene hain ₹1000.00"));
+            verify(session).sendText(eq(phone),org.mockito.ArgumentMatchers.contains("Stock mein koi badlav nahi hoga"));
         }
     }
 
@@ -445,7 +445,26 @@ class WhatsAppTurnTest {
         when(session.sendText(eq(phone),anyString())).thenReturn(new ProviderReceipt("accepted","canceled-question"));
         turn.openStored();
         assertThat(reviewQuestions.get(sh.userId())).isEmpty();
-        verify(session).sendText(eq(phone),org.mockito.ArgumentMatchers.contains("Cancelled the balance question"));
+        verify(session).sendText(eq(phone),org.mockito.ArgumentMatchers.contains("Balance wala sawal cancel ho gaya"));
+    }
+
+    @Test void outgoingPaymentAsksPurposeInHinglishAndRetainsAmount() {
+        String phone="919800005555"; Shelf sh=shelf(phone);
+        parties.create(sh.userId(),"Anisha Gajak",PartyRole.SUPPLIER);
+        byte[] first=message("anisha-paid",phone,"maine Anisha ko panch hajar diye"); ingress.receive(sign(first),first);
+        when(model.complete("maine Anisha ko panch hajar diye")).thenReturn("""
+          {"turn":"new_action","action":"outgoing_payment","party_name":"Anisha Gajak","amount_paise":500000}
+          """);
+        when(session.sendText(eq(phone),anyString())).thenReturn(new ProviderReceipt("accepted","anisha-paid-response"));
+        turn.openStored();
+        verify(session).sendText(eq(phone),org.mockito.ArgumentMatchers.contains("aapne Anisha Gajak ko ₹5000.00 diye"));
+        verify(session).sendText(eq(phone),org.mockito.ArgumentMatchers.contains("Purane bill ka bakaya chukaya, advance diya, ya udhaar diya?"));
+        verify(session,never()).sendText(eq(phone),org.mockito.ArgumentMatchers.contains("you owe"));
+        byte[] amount=message("anisha-repeat-amount",phone,"5000"); ingress.receive(sign(amount),amount);
+        when(model.complete("5000")).thenReturn("{\"turn\":\"new_action\",\"amount_paise\":500000}");
+        turn.openStored();
+        assertThat(draftRows.findByBusinessIdAndStatus(sh.businessId(),in.munimsaathi.draft.DraftStatus.NEEDS_CLARIFICATION)).hasSize(1);
+        assertThat(draftRows.findByBusinessIdAndStatus(sh.businessId(),in.munimsaathi.draft.DraftStatus.NEEDS_CLARIFICATION).get(0).getKind()).isEqualTo("OUTGOING_PAYMENT");
     }
 
 }

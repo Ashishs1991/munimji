@@ -525,4 +525,53 @@ class DemoRecoveryTest {
         assertThat(draftRows.findById(sale.draft().id()).orElseThrow().getStatus()).isEqualTo(DraftStatus.AWAITING_APPROVAL);
     }
 
+    @Test void moneyAlreadyGivenIsNotANewPayable() {
+        Shop s=shop(); parties.create(s.userId(),"Anisha Gajak",PartyRole.SUPPLIER);
+        when(model.complete("maine Anisha ko panch hajar diye")).thenReturn("""
+          {"turn":"new_action","action":"outgoing_payment","party_name":"Anisha Gajak","amount_paise":500000}
+          """);
+        var result=interpreter.interpret(s.userId(),"maine Anisha ko panch hajar diye",DAY,AT);
+        assertThat(draftRows.findById(result.draft().id()).orElseThrow().getKind()).isEqualTo("OUTGOING_PAYMENT");
+        assertThat(result.draft().missingFields()).contains("payment_purpose").doesNotContain("product","quantity","location");
+    }
+    @Test void paidCorrectionKeepsAmountThenAdvancePostsOnce() {
+        Shop s=shop(); UUID anisha=parties.create(s.userId(),"Anisha Gajak",PartyRole.SUPPLIER).getId();
+        var mistaken=drafts.proposeMoney(s.userId(),"payable",anisha,500000L,null,null,"new","payable",DAY,AT);
+        when(model.complete("maine pay kiye hai Anisha ko")).thenReturn("""
+          {"turn":"edit_action","action":"outgoing_payment","party_name":"Anisha Gajak"}
+          """);
+        var corrected=interpreter.interpret(s.userId(),"maine pay kiye hai Anisha ko",DAY,AT);
+        assertThat(corrected.draft().amountPaise()).isEqualTo(500000L);
+        assertThat(draftRows.findById(mistaken.id()).orElseThrow().getStatus()).isEqualTo(DraftStatus.SUSPENDED);
+        when(model.complete("advance tha")).thenReturn("{\"turn\":\"answer_to_clarification\",\"payment_purpose\":\"advance\"}");
+        var purpose=interpreter.interpret(s.userId(),"advance tha",DAY,AT);
+        assertThat(purpose.draft().id()).isEqualTo(corrected.draft().id());
+        when(model.complete("cash")).thenReturn("{\"turn\":\"answer_to_clarification\",\"payment_method\":\"Cash\"}");
+        var ready=interpreter.interpret(s.userId(),"cash",DAY,AT);
+        UUID document=drafts.approve(s.userId(),ready.draft().id(),ready.draft().version(),ready.draft().contentHash());
+        assertThat(drafts.approve(s.userId(),ready.draft().id(),ready.draft().version(),ready.draft().contentHash())).isEqualTo(document);
+        assertThat(posting.supplierPayablePaise(s.userId(),anisha)).isEqualTo(-500000L);
+        assertThat(counts.balance(s.userId(),s.productId(),s.godownId())).isEqualByComparingTo("0");
+    }
+    @Test void paidSupplierBillReducesPayableWhileLoanIncreasesReceivable() {
+        for(String purpose: new String[]{"bill_payment","loan"}) {
+            Shop s=shop(); UUID anisha=parties.create(s.userId(),"Anisha Gajak",PartyRole.SUPPLIER).getId();
+            if(purpose.equals("bill_payment")) posting.recordSupplierObligation(s.userId(),UUID.randomUUID(),anisha,500000L,"new",DAY,AT);
+            when(model.complete(purpose)).thenReturn("{\"turn\":\"new_action\",\"action\":\"outgoing_payment\",\"party_name\":\"Anisha Gajak\",\"amount_paise\":500000,\"payment_method\":\"Cash\",\"payment_purpose\":\""+purpose+"\"}");
+            var proposed=interpreter.interpret(s.userId(),purpose,DAY,AT);
+            drafts.approve(s.userId(),proposed.draft().id(),proposed.draft().version(),proposed.draft().contentHash());
+            assertThat(posting.supplierPayablePaise(s.userId(),anisha)).isZero();
+            if(purpose.equals("loan")) assertThat(posting.customerReceivablePaise(s.userId(),anisha)).isEqualTo(500000L);
+            assertThat(counts.balance(s.userId(),s.productId(),s.godownId())).isEqualByComparingTo("0");
+        }
+    }
+
+    @Test void aBareAmountWithoutAnActionAsksMoneyDirectionInsteadOfGoods() {
+        Shop s=shop();
+        when(model.complete("5000")).thenReturn("{\"turn\":\"new_action\",\"amount_paise\":500000}");
+        var result=interpreter.interpret(s.userId(),"5000",DAY,AT);
+        assertThat(result.draft()).isNull();
+        assertThat(result.answer()).contains("₹5000.00","mile hain, diye hain");
+    }
+
 }

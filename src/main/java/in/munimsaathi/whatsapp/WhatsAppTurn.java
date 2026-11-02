@@ -293,6 +293,7 @@ public class WhatsAppTurn {
     }
 
     private Prepared remembered(InboundMessage message, String ownerText, String text) {
+        text = HinglishReplies.render(text);
         memory.remember(message.getUserId(), "owner", ownerText);
         memory.remember(message.getUserId(), "assistant", text);
         return new Prepared(message.getPhone(), text);
@@ -337,6 +338,12 @@ public class WhatsAppTurn {
     }
 
     private String reply(InterpretationOutcome outcome) {
+        if (outcome.draft() != null) {
+            Draft pending = draftRows.findById(outcome.draft().id()).orElse(null);
+            if (pending != null && "OUTGOING_PAYMENT".equals(pending.getKind()) && pending.getStatus() == DraftStatus.NEEDS_CLARIFICATION) {
+                return outgoingQuestion(pending, outcome.answer());
+            }
+        }
         String facts = outcome.draft() == null ? null : details(outcome.draft());
         String text;
         if (outcome.answer() != null && facts != null) {
@@ -352,6 +359,21 @@ public class WhatsAppTurn {
             text = text + " E-way draft " + outcome.ewayDraftId() + " is saved and not submitted.";
         }
         return text;
+    }
+
+    private String outgoingQuestion(Draft draft, String note) {
+        Party party = draft.getCustomerId() == null ? null : parties.findById(draft.getCustomerId()).orElse(null);
+        if (party == null) {
+            return note == null ? "Kisko paise diye? Party ka poora naam bataiye." : note;
+        }
+        if (draft.getAmountPaise() == null) {
+            return party.getDisplayName() + " ko kitne rupaye diye?";
+        }
+        String facts = "Samjha: aapne " + party.getDisplayName() + " ko ₹" + BigDecimal.valueOf(draft.getAmountPaise(), 2).toPlainString() + " diye. ";
+        if (draft.getMissingFields().contains("payment_purpose")) {
+            return facts + "Purane bill ka bakaya chukaya, advance diya, ya udhaar diya?";
+        }
+        return facts + "Cash se ya UPI se diye?";
     }
 
     private String details(DraftProposal draft) {
@@ -402,6 +424,7 @@ public class WhatsAppTurn {
                 case "date" -> "the date";
                 case "amount" -> "the amount";
                 case "payment_method" -> "cash or UPI";
+                case "payment_purpose" -> "payment ka maksad (purana bill, advance, ya udhaar)";
                 case "cause" -> "whether this amount is new";
                 default -> field.startsWith("line-") ? "line " + field.substring("line-".length()) : field;
             };
@@ -422,7 +445,7 @@ public class WhatsAppTurn {
         List<DraftLine> lines = draftLines.findByDraftIdOrderByLineNumberAsc(draft.getId());
         StringBuilder text = new StringBuilder();
         Party party = draft.getCustomerId() == null ? null : parties.findById(draft.getCustomerId()).orElse(null);
-        if ("PAYMENT".equals(draft.getKind()) || "RECEIVABLE".equals(draft.getKind()) || "PAYABLE".equals(draft.getKind())) {
+        if ("PAYMENT".equals(draft.getKind()) || "RECEIVABLE".equals(draft.getKind()) || "PAYABLE".equals(draft.getKind()) || "OUTGOING_PAYMENT".equals(draft.getKind())) {
             return moneyFacts(draft, party);
         }
         if (party != null) {
@@ -479,6 +502,17 @@ public class WhatsAppTurn {
         String name = party == null ? "party not selected" : party.getDisplayName();
         String amount = draft.getAmountPaise() == null ? "amount not stated" : "₹" + BigDecimal.valueOf(draft.getAmountPaise(), 2).toPlainString();
         boolean posted = draft.getStatus() == DraftStatus.POSTED;
+        if ("OUTGOING_PAYMENT".equals(draft.getKind())) {
+            String purpose = switch (draft.getCause() == null ? "" : draft.getCause()) {
+                case "bill_payment" -> "purane bakaye ki payment; bakaya ghatega";
+                case "advance" -> "supplier ko advance; supplier ke paas aapka credit record hoga";
+                case "loan" -> "udhaar diya; aapko unse paise lene hain";
+                default -> "payment ka maksad abhi confirm karna hai";
+            };
+            String method = draft.getPaymentMethod() == null ? "Cash ya UPI abhi batana hai" : draft.getPaymentMethod();
+            return (posted ? "Record ho gaya: " : "Record karna hai: ") + "aapne " + name + " ko " + amount
+                    + " diye. " + purpose + ". " + method + ". Stock mein koi badlav nahi";
+        }
         if ("PAYMENT".equals(draft.getKind())) {
             String method = draft.getPaymentMethod() == null ? "payment method not stated" : draft.getPaymentMethod();
             String allocation = draft.getAllocatesDocumentId() == null
@@ -530,5 +564,8 @@ public class WhatsAppTurn {
     }
 
     private record Prepared(String phone, String text) {
+        private Prepared {
+            text = HinglishReplies.render(text);
+        }
     }
 }

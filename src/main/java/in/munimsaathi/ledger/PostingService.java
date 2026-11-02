@@ -516,6 +516,11 @@ public class PostingService {
             LocalDate occurredOn,
             Instant occurredAt
     ) {
+        return postSupplierPayment(userId, operationId, supplierId, billId, amountPaise, paymentMethod, occurredOn, occurredAt, false);
+    }
+
+    private UUID postSupplierPayment(UUID userId, UUID operationId, UUID supplierId, UUID billId, long amountPaise,
+                                    String paymentMethod, LocalDate occurredOn, Instant occurredAt, boolean advance) {
         UUID businessId = tenants.currentBusinessId(userId);
         Optional<UUID> prior = alreadyPosted(businessId, operationId);
         if (prior.isPresent()) {
@@ -525,7 +530,7 @@ public class PostingService {
         String method = requirePaymentMethod(paymentMethod);
         requireParty(businessId, supplierId, PartyRole.SUPPLIER);
         requireWhen(occurredOn, occurredAt);
-        if (amountPaise > ledger.payablePaise(businessId, supplierId)) {
+        if (!advance && amountPaise > ledger.payablePaise(businessId, supplierId)) {
             throw new IllegalArgumentException("Payment is larger than the supplier balance.");
         }
         if (billId != null) {
@@ -574,6 +579,32 @@ public class PostingService {
             ));
         }
         return payment.getId();
+    }
+
+    @Transactional
+    public UUID recordOutgoingPayment(UUID userId, UUID operationId, UUID partyId, long amountPaise,
+                                      String paymentMethod, String purpose, LocalDate occurredOn, Instant occurredAt) {
+        UUID businessId = tenants.currentBusinessId(userId);
+        Optional<UUID> prior = alreadyPosted(businessId, operationId);
+        if (prior.isPresent()) return prior.get();
+        requirePositive(amountPaise);
+        requirePaymentMethod(paymentMethod);
+        requireWhen(occurredOn, occurredAt);
+        if (!List.of("bill_payment", "advance", "loan").contains(purpose == null ? "" : purpose)) {
+            throw new IllegalArgumentException("Purane bill ki payment thi, advance tha, ya udhaar diya tha?");
+        }
+        Party party = parties.findById(partyId).orElseThrow(() -> new IllegalArgumentException("Party nahi mili."));
+        if (!businessId.equals(party.getBusinessId())) throw new IllegalArgumentException("Party nahi mili.");
+        // The owner has approved this counterparty's new financial role; preserve its existing role too.
+        PartyRole required = "loan".equals(purpose) ? PartyRole.CUSTOMER : PartyRole.SUPPLIER;
+        if (party.getRole() != required && party.getRole() != PartyRole.BOTH) party.changeRole(PartyRole.BOTH);
+        if ("loan".equals(purpose)) {
+            UUID id = recordStandaloneReceivable(userId, operationId, partyId, amountPaise, "new", occurredOn, occurredAt);
+            documents.findById(id).orElseThrow().recordPaymentMethod(paymentMethod);
+            return id;
+        }
+        return postSupplierPayment(userId, operationId, partyId, null, amountPaise, paymentMethod,
+                occurredOn, occurredAt, "advance".equals(purpose));
     }
 
     @Transactional(readOnly = true)

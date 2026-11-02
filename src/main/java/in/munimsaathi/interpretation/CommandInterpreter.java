@@ -177,6 +177,7 @@ public class CommandInterpreter {
             case "customer_payment_received", "payment_received", "payment" -> "payment";
             case "standalone_receivable", "receivable" -> "receivable";
             case "supplier_payable", "payable" -> "payable";
+            case "outgoing_payment", "money_paid", "supplier_payment" -> "outgoing_payment";
             default -> null;
         };
         boolean balanceQuery = "party_balance".equals(normalized) || "balance".equals(normalized)
@@ -211,7 +212,15 @@ public class CommandInterpreter {
                 supplier = "RECEIPT".equals(open.get(0).kind()) || "PAYABLE".equals(open.get(0).kind());
             }
         }
-        UUID customerId = party(userId, text(reply, "party_name"), supplier);
+        UUID customerId;
+        boolean outgoing = "outgoing_payment".equals(action) || (action == null && drafts.open(userId).size() == 1
+                && "OUTGOING_PAYMENT".equals(drafts.open(userId).get(0).kind()));
+        if (outgoing && text(reply, "party_name") != null) {
+            var named = parties.findByName(userId, text(reply, "party_name"));
+            customerId = named.size() == 1 ? named.get(0).getId() : null;
+        } else {
+            customerId = party(userId, text(reply, "party_name"), supplier);
+        }
         if (customerId == null && text(reply, "party_name") == null && ("payment".equals(action) || "receivable".equals(action))) {
             List<Party> owing = parties.list(userId).stream()
                     .filter(party -> party.getRole() == PartyRole.CUSTOMER || party.getRole() == PartyRole.BOTH)
@@ -226,7 +235,7 @@ public class CommandInterpreter {
         BigDecimal quantity = quantity(reply.get("quantity"));
         String unit = text(reply, "unit");
         Long amount = amount(reply.get("amount_paise"));
-        boolean money = "payment".equals(action) || "receivable".equals(action) || "payable".equals(action);
+        boolean money = "payment".equals(action) || "receivable".equals(action) || "payable".equals(action) || outgoing;
         JsonNode lineNodes = reply.get("lines");
         if (!money && lineNodes != null && lineNodes.isArray() && !lineNodes.isEmpty()) {
             List<DraftLineSpec> specs = new ArrayList<>();
@@ -255,8 +264,24 @@ public class CommandInterpreter {
             return new InterpretationOutcome(null, refused, ewayDraftId, answer);
         }
         String method = text(reply, "payment_method");
+        String purpose = text(reply, "payment_purpose");
+        if ("outgoing_payment".equals(action) && "edit_action".equals(turn)
+                && drafts.open(userId).stream().noneMatch(d -> "OUTGOING_PAYMENT".equals(d.kind()))) {
+            UUID namedParty = customerId;
+            var candidates = drafts.open(userId).stream()
+                    .filter(d -> money(d.kind()) && !"OUTGOING_PAYMENT".equals(d.kind()))
+                    .filter(d -> namedParty == null || namedParty.equals(d.partyId())).toList();
+            if (candidates.size() != 1) {
+                return new InterpretationOutcome(null, refused, ewayDraftId, "Kaunsi payment ki baat kar rahe hain? Party aur amount confirm kar dein.");
+            }
+            var previous = candidates.get(0);
+            if (amount == null) amount = previous.amountPaise();
+            if (customerId == null) customerId = previous.partyId();
+            drafts.suspend(userId, previous.id());
+            draftId = null;
+        }
         boolean stated = action != null || customerId != null || productId != null || locationId != null
-                || quantity != null || unit != null || amount != null || method != null;
+                || quantity != null || unit != null || amount != null || method != null || purpose != null;
         if (!stated) {
             return new InterpretationOutcome(null, refused, ewayDraftId, spoken(reply));
         }
@@ -270,7 +295,7 @@ public class CommandInterpreter {
             return new InterpretationOutcome(null, refused, ewayDraftId, "That amount is not the balance I have. Say the new amount if it is new.");
         }
         if (Boolean.TRUE.equals(flag(reply, "create_party")) && customerId == null && text(reply, "party_name") != null) {
-            PartyRole role = supplier ? PartyRole.SUPPLIER : PartyRole.CUSTOMER;
+            PartyRole role = outgoing ? PartyRole.BOTH : supplier ? PartyRole.SUPPLIER : PartyRole.CUSTOMER;
             customerId = parties.create(userId, text(reply, "party_name"), role).getId();
         }
         boolean locationOnly = action == null && locationId != null && quantity == null && unit == null
@@ -283,23 +308,41 @@ public class CommandInterpreter {
                 return new InterpretationOutcome(null, refused, ewayDraftId, "Which draft should get that godown?");
             }
         }
-        UUID bound = bindDraft(userId, draftId, turn, action, customerId, productId, locationId, quantity, unit, amount, method);
+        String bindTurn = turn;
+        var pendingMoney = drafts.open(userId);
+        if (action == null && pendingMoney.size() == 1 && money(pendingMoney.get(0).kind())
+                && productId == null && locationId == null && quantity == null && unit == null) {
+            var previous = pendingMoney.get(0);
+            if ((customerId != null && previous.missing().contains("party") && amount == null && method == null && purpose == null)
+                    || (amount != null && (previous.missing().contains("amount") || amount.equals(previous.amountPaise())))
+                    || (method != null && previous.missing().contains("payment_method"))
+                    || (purpose != null && previous.missing().contains("payment_purpose"))) {
+                bindTurn = "answer_to_clarification";
+            }
+        }
+        UUID bound = bindDraft(userId, draftId, bindTurn, action, customerId, productId, locationId, quantity, unit, amount, method);
+        if (bound == null && action == null && amount != null && productId == null && locationId == null && quantity == null && unit == null) {
+            return new InterpretationOutcome(null, refused, ewayDraftId, "₹" + BigDecimal.valueOf(amount, 2).toPlainString()
+                    + " ki baat hai. Paise mile hain, diye hain, ya lene/dene baaki hain?");
+        }
         String boundKind = bound == null ? null : drafts.kindOf(userId, bound);
-        boolean moneyDraft = money || "PAYMENT".equals(boundKind) || "RECEIVABLE".equals(boundKind) || "PAYABLE".equals(boundKind);
+        boolean moneyDraft = money || "PAYMENT".equals(boundKind) || "RECEIVABLE".equals(boundKind) || "PAYABLE".equals(boundKind) || "OUTGOING_PAYMENT".equals(boundKind);
         if (moneyDraft) {
             String moneyAction = action != null ? action : switch (boundKind) {
                 case "RECEIVABLE" -> "receivable";
                 case "PAYABLE" -> "payable";
+                case "OUTGOING_PAYMENT" -> "outgoing_payment";
                 default -> "payment";
             };
             UUID allocates = null;
             if ("payment".equals(moneyAction) && customerId != null && amount != null && flag(reply, "allocate") != Boolean.FALSE) {
                 allocates = posting.soleOpenSale(userId, customerId, amount).orElse(null);
             }
-            String direction = "payable".equals(moneyAction) ? "payable" : "receivable";
+            String direction = "outgoing_payment".equals(moneyAction) ? "outgoing" : "payable".equals(moneyAction) ? "payable" : "receivable";
+            String why = "outgoing_payment".equals(moneyAction) ? purpose : text(reply, "cause");
             DraftProposal draft = bound == null
-                    ? drafts.proposeMoney(userId, moneyAction, customerId, amount, method, allocates, text(reply, "cause"), direction, occurredOn, occurredAt)
-                    : drafts.continueMoney(userId, bound, moneyAction, customerId, amount, method, allocates, text(reply, "cause"), direction, occurredOn, occurredAt);
+                    ? drafts.proposeMoney(userId, moneyAction, customerId, amount, method, allocates, why, direction, occurredOn, occurredAt)
+                    : drafts.continueMoney(userId, bound, moneyAction, customerId, amount, method, allocates, why, direction, occurredOn, occurredAt);
             String note = clarification(userId, text(reply, "party_name"), customerId, supplier, null, productId);
             if (customerId == null && text(reply, "party_name") == null) {
                 note = join(note, "Who was this?");
@@ -307,7 +350,12 @@ public class CommandInterpreter {
             if (customerId == null && text(reply, "party_name") != null) {
                 note = join(note, "Say create if I should add this party.");
             }
-            if (draft.missingFields().contains("payment_method")) {
+            if ("outgoing_payment".equals(moneyAction) && (customerId == null || draft.missingFields().contains("amount"))) {
+                return new InterpretationOutcome(draft, refused, ewayDraftId, note);
+            }
+            if (draft.missingFields().contains("payment_purpose")) {
+                note = join(note, "Purane bill ka bakaya chukaya, advance diya, ya udhaar diya? Amount dobara batane ki zarurat nahi hai.");
+            } else if (draft.missingFields().contains("payment_method")) {
                 note = join(note, "Cash or UPI?");
             }
             if (draft.missingFields().contains("cause")) {
@@ -733,7 +781,7 @@ public class CommandInterpreter {
         if (!open.isEmpty()) {
             text.append("\nopen drafts:");
             for (DraftBook.OpenDraft draft : open) {
-                text.append('\n').append(draft.id()).append(' ').append(draft.kind()).append(" missing=").append(draft.missing());
+                text.append('\n').append(draft.id()).append(' ').append(draft.kind()).append(" party_id=").append(draft.partyId()).append(" amount_paise=").append(draft.amountPaise()).append(" missing=").append(draft.missing());
             }
         }
         List<Party> known = parties.list(userId);
@@ -744,7 +792,7 @@ public class CommandInterpreter {
                 if (count == 20) {
                     break;
                 }
-                text.append(' ').append(party.getDisplayName()).append(" [").append(party.getRole()).append("]");
+                text.append(' ').append(party.getDisplayName()).append(" id=").append(party.getId()).append(" [").append(party.getRole()).append("]");
                 count++;
             }
         }
@@ -822,7 +870,7 @@ public class CommandInterpreter {
     }
 
     private static boolean money(String kind) {
-        return "PAYMENT".equals(kind) || "RECEIVABLE".equals(kind) || "PAYABLE".equals(kind);
+        return "PAYMENT".equals(kind) || "RECEIVABLE".equals(kind) || "PAYABLE".equals(kind) || "OUTGOING_PAYMENT".equals(kind);
     }
 
     private static String kindOf(String action) {
@@ -832,6 +880,7 @@ public class CommandInterpreter {
             case "payment" -> "PAYMENT";
             case "receivable" -> "RECEIVABLE";
             case "payable" -> "PAYABLE";
+            case "outgoing_payment" -> "OUTGOING_PAYMENT";
             default -> null;
         };
     }
