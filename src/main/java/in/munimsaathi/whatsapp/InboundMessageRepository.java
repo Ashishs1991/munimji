@@ -47,5 +47,14 @@ public interface InboundMessageRepository extends JpaRepository<InboundMessage, 
                                                 @Param("userId") UUID userId,
                                                 @Param("phone") String phone);
 
+    @Query(value = """
+            select * from inbound_messages
+            where business_id = :businessId and user_id = :userId and phone = :phone
+              and status = 'REPLIED' and reply_sent_at is not null
+            order by reply_sent_at desc limit 1
+            """, nativeQuery = true)
+    Optional<InboundMessage> latestReply(@Param("businessId") UUID businessId,
+                                       @Param("userId") UUID userId, @Param("phone") String phone);
+
     long countByMessageId(String messageId);
 }

@@ -121,6 +121,153 @@ class WhatsAppTurnTest {
     @Autowired
     private OwnerDashboard dashboard;
 
+    @Autowired private in.munimsaathi.location.LocationBook locationNotes;
+
+    @Test
+    void retryingAProductCreationReplyDoesNotReinterpretYesOrPostStock() {
+        String phone = "919800005563";
+        Shelf sh = shelf(phone);
+        parties.create(sh.userId(), "Supplier", PartyRole.SUPPLIER);
+        when(model.complete("retry product purchase")).thenReturn("""
+                {"turn":"new_action","action":"goods_received","party_name":"Supplier","product_name":"Retry plastic","quantity":"5","unit":"bori","location_code":"g1"}
+                """);
+        when(session.sendText(eq(phone), anyString())).thenReturn(new ProviderReceipt("accepted", "question-accepted"))
+                .thenThrow(new IllegalStateException("temporary provider failure"))
+                .thenReturn(new ProviderReceipt("accepted", "preview-accepted"));
+        byte[] first = message("retry-product-first", phone, "retry product purchase"); ingress.receive(sign(first), first); turn.openStored();
+        UUID draftId = messages.findByMessageId("retry-product-first").orElseThrow().getDraftId();
+        byte[] yes = message("retry-product-yes", phone, "Yes"); ingress.receive(sign(yes), yes); turn.openStored();
+        InboundMessage pending = messages.findByMessageId("retry-product-yes").orElseThrow();
+        assertThat(pending.getStatus()).isEqualTo(InboundStatus.STORED);
+        assertThat(pending.getReplyText()).contains("Is entry ko confirm karne ke liye");
+        turn.openStored();
+        Draft row = draftRows.findById(draftId).orElseThrow();
+        assertThat(row.getStatus()).isEqualTo(DraftStatus.AWAITING_APPROVAL);
+        assertThat(counts.balance(sh.userId(), row.getProductId(), sh.godownId())).isEqualByComparingTo("0");
+        assertThat(messages.findByMessageId("retry-product-yes").orElseThrow().getStatus()).isEqualTo(InboundStatus.REPLIED);
+        verify(session, times(2)).sendText(eq(phone), eq(pending.getReplyText()));
+        verify(model, times(1)).complete(anyString());
+    }
+
+    @Test
+    void actualHindiStorageVoiceAndVoiceApprovalSaveOnlyALocationNote() {
+        String phone = "919800005562";
+        Shelf sh = shelf(phone);
+        String transcript = "अनिल भाई का माल गोदाम वन गोदाम वन में रखा है।";
+        when(model.complete(transcript)).thenReturn("""
+                {"turn":"new_action","action":"goods_received","party_name":"अनिल भाई","location_code":"गोदाम वन"}
+                """);
+        when(session.sendText(eq(phone), anyString())).thenReturn(new ProviderReceipt("accepted", "hindi-location-reply"));
+        for (String id : new String[]{"hindi-location-note", "hindi-location-approve", "hindi-location-repeat"}) {
+            byte[] audio = ("{\"entry\":[{\"changes\":[{\"value\":{\"messages\":[{\"id\":\"" + id + "\",\"from\":\"" + phone
+                    + "\",\"audio\":{\"id\":\"" + id + "-media\",\"mime_type\":\"audio/ogg\"}}]}}]}]}").getBytes(StandardCharsets.UTF_8);
+            when(session.download(id + "-media")).thenReturn(new byte[]{1, 2, 3});
+            when(transcriber.transcribe(any(), anyString())).thenReturn(id.equals("hindi-location-note") ? transcript : "हाँ।");
+            ingress.receive(sign(audio), audio); turn.openStored();
+        }
+        UUID note = messages.findByMessageId("hindi-location-note").orElseThrow().getDraftId();
+        assertThat(draftRows.findById(note).orElseThrow().getKind()).isEqualTo("LOCATION");
+        assertThat(draftRows.findById(note).orElseThrow().getStatus()).isEqualTo(DraftStatus.POSTED);
+        assertThat(locationNotes.locateLabel(sh.userId(), "अनिल भाई का माल")).hasSize(1);
+        assertThat(locationNotes.locateLabel(sh.userId(), "अनिल भाई का माल").get(0).locationId()).isEqualTo(sh.godownId());
+        assertThat(counts.balance(sh.userId(), sh.productId(), sh.godownId())).isEqualByComparingTo("50");
+        assertThat(messages.findByMessageId("hindi-location-approve").orElseThrow().getPostedDocumentId()).isNull();
+        verify(model, times(1)).complete(anyString());
+    }
+
+    @Test
+    void yesAfterAReadQueryDoesNotApproveTheEarlierSale() {
+        String phone = "919800005560";
+        Shelf sh = shelf(phone);
+        var sale = drafts.propose(sh.userId(), "sale", sh.customerId(), sh.productId(), sh.godownId(), BigDecimal.ONE, "box", 100_000L, LocalDate.now(), Instant.now());
+        when(session.sendText(eq(phone), anyString())).thenReturn(new ProviderReceipt("accepted", "topic-reply"));
+        byte[] preview = message("sale-before-query", phone, "entry " + sale.id());
+        ingress.receive(sign(preview), preview); turn.openStored();
+        when(model.complete("Agarwal ka balance")).thenReturn("""
+                {"turn":"read_query","action":"party_balance","party_name":"Agarwal","balance_side":"receivable"}
+                """);
+        byte[] query = message("read-after-sale", phone, "Agarwal ka balance");
+        ingress.receive(sign(query), query); turn.openStored();
+        byte[] yes = message("yes-after-read", phone, "Yes");
+        ingress.receive(sign(yes), yes); turn.openStored();
+        assertThat(draftRows.findById(sale.id()).orElseThrow().getStatus()).isEqualTo(DraftStatus.AWAITING_APPROVAL);
+        assertThat(counts.balance(sh.userId(), sh.productId(), sh.godownId())).isEqualByComparingTo("50");
+        verify(session).sendText(eq(phone), org.mockito.ArgumentMatchers.contains("Kaunsi entry confirm karni hai"));
+    }
+
+    @Test
+    void aConversationalOwnerReminderCanStillBeConfirmedAfterAnotherTopic() {
+        String phone = "919800005561";
+        Shelf sh = shelf(phone);
+        when(session.sendText(eq(phone), anyString())).thenReturn(new ProviderReceipt("accepted", "reminder-topic-reply"));
+        when(model.complete("Hi")).thenReturn("{\"turn\":\"unclear\",\"reply\":\"Namaste\"}");
+        byte[] hi = message("hi-before-reminder", phone, "Hi"); ingress.receive(sign(hi), hi); turn.openStored();
+        when(model.complete("kal 10 baje yaad dilana")).thenReturn("""
+                {"turn":"new_action","action":"reminder","reminder_date":"%s","reminder_time":"10:00"}
+                """.formatted(LocalDate.now().plusDays(1)));
+        byte[] request = message("conversational-reminder", phone, "kal 10 baje yaad dilana"); ingress.receive(sign(request), request); turn.openStored();
+        assertThat(messages.findByMessageId("conversational-reminder").orElseThrow().getReminderTaskId()).isNotNull();
+        byte[] yes = message("approve-conversational-reminder", phone, "Yes"); ingress.receive(sign(yes), yes); turn.openStored();
+        verify(session).sendText(eq(phone), org.mockito.ArgumentMatchers.contains("Reminder confirm ho gaya"));
+    }
+
+    @Test
+    void voiceYesCreatesProductThenASeparateVoiceYesPostsStockOnce() {
+        String phone = "919800005558";
+        Shelf sh = shelf(phone);
+        parties.create(sh.userId(), "Anil bhai", PartyRole.SUPPLIER);
+        String command = "Anil se 5 bori Plastic boxes aaya Godown 1";
+        when(model.complete(command)).thenReturn("""
+                {"turn":"new_action","action":"goods_received","party_name":"Anil bhai","product_name":"Plastic boxes","quantity":"5","unit":"bori","location_code":"g1"}
+                """);
+        when(session.sendText(eq(phone), anyString())).thenReturn(new ProviderReceipt("accepted", "voice-product-reply"));
+        byte[] start = message("voice-product-start", phone, command);
+        ingress.receive(sign(start), start);
+        turn.openStored();
+        UUID draftId = messages.findByMessageId("voice-product-start").orElseThrow().getDraftId();
+        for (String id : new String[]{"voice-product-create", "voice-product-post", "voice-product-repeat"}) {
+            byte[] audio = ("{\"entry\":[{\"changes\":[{\"value\":{\"messages\":[{\"id\":\"" + id + "\",\"from\":\"" + phone
+                    + "\",\"audio\":{\"id\":\"" + id + "-media\",\"mime_type\":\"audio/ogg\"}}]}}]}]}").getBytes(StandardCharsets.UTF_8);
+            when(session.download(id + "-media")).thenReturn(new byte[]{1, 2, 3});
+            when(transcriber.transcribe(any(), anyString())).thenReturn("हाँ।");
+            ingress.receive(sign(audio), audio);
+            turn.openStored();
+            Draft row = draftRows.findById(draftId).orElseThrow();
+            assertThat(row.getProductId()).isNotNull();
+            assertThat(counts.balance(sh.userId(), row.getProductId(), sh.godownId()))
+                    .isEqualByComparingTo(id.equals("voice-product-create") ? "0" : "5");
+            assertThat(row.getStatus()).isEqualTo(id.equals("voice-product-create") ? DraftStatus.AWAITING_APPROVAL : DraftStatus.POSTED);
+        }
+        verify(model, times(1)).complete(anyString());
+    }
+
+    @Test
+    void yesToNewPartyQuestionCannotApproveAnOlderShownTransaction() {
+        String phone = "919800005559";
+        Shelf sh = shelf(phone);
+        var old = drafts.propose(sh.userId(), "sale", sh.customerId(), sh.productId(), sh.godownId(), BigDecimal.ONE, "box", 100_000L, LocalDate.now(), Instant.now());
+        when(session.sendText(eq(phone), anyString())).thenReturn(new ProviderReceipt("accepted", "question-reply"));
+        byte[] preview = message("old-sale-preview", phone, "entry " + old.id());
+        ingress.receive(sign(preview), preview);
+        turn.openStored();
+        String command = "new party ko udhaar cash 10000 diye";
+        when(model.complete(command)).thenReturn("""
+                {"turn":"new_action","action":"outgoing_payment","party_name":"New Anil","amount_paise":1000000,"payment_method":"Cash","payment_purpose":"loan"}
+                """);
+        byte[] start = message("new-party-question", phone, command);
+        ingress.receive(sign(start), start);
+        turn.openStored();
+        UUID loan = messages.findByMessageId("new-party-question").orElseThrow().getDraftId();
+        byte[] yes = message("yes-to-party-question", phone, "Haan");
+        ingress.receive(sign(yes), yes);
+        turn.openStored();
+        assertThat(draftRows.findById(loan).orElseThrow().getStatus()).isEqualTo(DraftStatus.AWAITING_APPROVAL);
+        assertThat(draftRows.findById(old.id()).orElseThrow().getStatus()).isNotEqualTo(DraftStatus.POSTED);
+        assertThat(counts.balance(sh.userId(), sh.productId(), sh.godownId())).isEqualByComparingTo("50");
+        assertThat(messages.findByMessageId("yes-to-party-question").orElseThrow().getPostedDocumentId()).isNull();
+        verify(model, times(1)).complete(anyString());
+    }
+
     @Test
     void unknownSupplierQuestionKeepsTheVoicePurchaseFactsAndAsksOneThing() {
         String phone = "919800005557";
@@ -137,7 +284,7 @@ class WhatsAppTurnTest {
         turn.openStored();
         var text = org.mockito.ArgumentCaptor.forClass(String.class);
         verify(session).sendText(eq(phone), text.capture());
-        assertThat(text.getValue()).contains("1000 बोरी", "Godown 1", "अगरवाल पेठा", "Supplier").doesNotContain("Kaunsa product", "Kis godown");
+        assertThat(text.getValue()).contains("1000 बोरी", "Godown 1", "अगरवाल पेठा", "supplier party").doesNotContain("Kaunsa product", "Kis godown");
         Draft stored = draftRows.findById(messages.findByMessageId("purchase-voice-clarify").orElseThrow().getDraftId()).orElseThrow();
         assertThat(stored.getHeardProduct()).isEqualTo("प्लास्टिक");
         assertThat(stored.getHeardParty()).isEqualTo("अगरवाल पेठा");

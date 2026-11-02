@@ -90,6 +90,14 @@ public class VoiceReceipts {
             LocalDate occurredOn,
             Instant occurredAt
     ) {
+        return capture(userId, mediaType, fileName, audio, occurredOn, occurredAt,
+                transcript -> interpreter.interpret(userId, transcript, null, occurredOn, occurredAt));
+    }
+
+    @Transactional
+    public VoiceCapture capture(UUID userId, String mediaType, String fileName, byte[] audio,
+                                LocalDate occurredOn, Instant occurredAt,
+                                java.util.function.Function<String, InterpretationOutcome> interpret) {
         String type = mediaType == null ? "" : mediaType.toLowerCase(Locale.ROOT).split(";", 2)[0].trim();
         if (!AUDIO.contains(type)) {
             throw new IllegalArgumentException("Attach a voice note.");
@@ -101,7 +109,7 @@ public class VoiceReceipts {
         if (transcript == null || transcript.isBlank()) {
             throw new IllegalArgumentException("The voice note had no transcript.");
         }
-        InterpretationOutcome outcome = interpreter.interpret(userId, transcript, null, occurredOn, occurredAt);
+        InterpretationOutcome outcome = interpret.apply(transcript);
         DraftProposal draft = outcome.draft();
         UUID businessId = tenants.currentBusinessId(userId);
         Evidence stored = evidence.save(new Evidence(

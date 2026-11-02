@@ -95,6 +95,12 @@ public class Draft {
     @Column(name = "heard_location")
     private String heardLocation;
 
+    public void forgetResolved(boolean party, boolean product, boolean location) {
+        if (party) customerId = null;
+        if (product) productId = null;
+        if (location) locationId = null;
+    }
+
     public void rememberHeard(String party, String product, String location) {
         if (party != null) heardParty = party;
         if (product != null) heardProduct = product;
@@ -104,6 +110,12 @@ public class Draft {
     public String getHeardParty() { return heardParty; }
     public String getHeardProduct() { return heardProduct; }
     public String getHeardLocation() { return heardLocation; }
+
+    @Column(name = "location_label")
+    private String locationLabel;
+
+    public String getLocationLabel() { return locationLabel; }
+    public void rememberLocationLabel(String label) { locationLabel = label; }
 
     protected Draft() {
     }

@@ -30,6 +30,7 @@ public class DraftBook {
     private final ApprovalRepository approvals;
     private final PostingService posting;
     private final PostedDocumentRepository documents;
+    private final in.munimsaathi.location.LocationBook locations;
 
     public DraftBook(
             TenantContext tenants,
@@ -37,7 +38,8 @@ public class DraftBook {
             DraftLineRepository draftLines,
             ApprovalRepository approvals,
             PostingService posting,
-            PostedDocumentRepository documents
+            PostedDocumentRepository documents,
+            in.munimsaathi.location.LocationBook locations
     ) {
         this.tenants = tenants;
         this.drafts = drafts;
@@ -45,6 +47,34 @@ public class DraftBook {
         this.approvals = approvals;
         this.posting = posting;
         this.documents = documents;
+        this.locations = locations;
+    }
+
+    @Transactional(readOnly = true)
+    public Draft inspect(UUID userId, UUID draftId) {
+        return requireDraft(tenants.currentBusinessId(userId), draftId);
+    }
+
+    @Transactional
+    public DraftProposal proposeLocation(UUID userId, UUID draftId, String label, UUID locationId, LocalDate day, Instant at) {
+        Draft draft = draftId == null ? new Draft(UUID.randomUUID(), tenants.currentBusinessId(userId), userId)
+                : requireDraft(tenants.currentBusinessId(userId), draftId);
+        if (draft.getStatus() == DraftStatus.POSTED || (draft.getKind() != null && !"LOCATION".equals(draft.getKind()))) {
+            throw new IllegalArgumentException("Location note ke liye sahi pending entry chuniye.");
+        }
+        String name = label == null ? draft.getLocationLabel() : label.trim();
+        UUID place = locationId == null ? draft.getLocationId() : locationId;
+        if (name != null && name.isBlank()) name = null;
+        List<String> missing = new ArrayList<>();
+        if (name == null) missing.add("location_label");
+        if (place == null) missing.add("location");
+        if (day == null || at == null) missing.add("date");
+        long version = draft.getVersion() + 1;
+        draft.rememberLocationLabel(name);
+        draft.replace("LOCATION", missing.isEmpty() ? DraftStatus.AWAITING_APPROVAL : DraftStatus.NEEDS_CLARIFICATION,
+                hash(version, "LOCATION", null, null, place, null, null, null, day, at, name),
+                null, null, place, null, null, null, day, at, String.join(",", missing), Instant.now().plus(2, ChronoUnit.HOURS));
+        return view(drafts.save(draft));
     }
 
     @Transactional
@@ -441,6 +471,13 @@ public class DraftBook {
     }
 
     @Transactional
+    public void forgetResolved(UUID userId, UUID draftId, boolean party, boolean product, boolean location) {
+        Draft draft = requireDraft(tenants.currentBusinessId(userId), draftId);
+        if (draft.getStatus() == DraftStatus.POSTED) throw new IllegalArgumentException("Posted entry badal nahi sakte.");
+        draft.forgetResolved(party, product, location);
+    }
+
+    @Transactional
     public void rememberHeard(UUID userId, UUID draftId, String party, String product, String location) {
         Draft draft = requireDraft(tenants.currentBusinessId(userId), draftId);
         if (draft.getStatus() != DraftStatus.POSTED) draft.rememberHeard(party, product, location);
@@ -455,6 +492,7 @@ public class DraftBook {
                     .append(" party_id=").append(draft.getCustomerId()).append(" heard_party=").append(draft.getHeardParty())
                     .append(" product_id=").append(draft.getProductId()).append(" heard_product=").append(draft.getHeardProduct())
                     .append(" location_id=").append(draft.getLocationId()).append(" heard_location=").append(draft.getHeardLocation())
+                    .append(" location_label=").append(draft.getLocationLabel())
                     .append(" quantity=").append(draft.getDisplayQuantity()).append(" unit=").append(draft.getUnitLabel())
                     .append(" amount_paise=").append(draft.getAmountPaise()).append(" missing=").append(draft.getMissingFields());
             for (DraftLine line : draftLines.findByDraftIdOrderByLineNumberAsc(draft.getId())) {
@@ -475,6 +513,7 @@ public class DraftBook {
         Draft draft = requireDraft(businessId, draftId);
         if (draft.getStatus() == DraftStatus.POSTED) {
             if (draft.getVersion() == version && draft.getContentHash().equals(contentHash)) {
+                if ("LOCATION".equals(draft.getKind())) return post(userId, draft);
                 return documents.findByOperationId(draft.getId()).orElseThrow().getId();
             }
             throw new IllegalArgumentException("This approval is no longer current.");
@@ -514,6 +553,9 @@ public class DraftBook {
     }
 
     private UUID post(UUID userId, Draft draft) {
+        if ("LOCATION".equals(draft.getKind())) {
+            return locations.remember(userId, draft.getId(), draft.getLocationLabel(), draft.getLocationId(), null, draft.getOccurredAt());
+        }
         if ("OUTGOING_PAYMENT".equals(draft.getKind())) {
             return posting.recordOutgoingPayment(userId, draft.getId(), draft.getCustomerId(), draft.getAmountPaise(),
                     draft.getPaymentMethod(), draft.getCause(), draft.getOccurredOn(), draft.getOccurredAt());

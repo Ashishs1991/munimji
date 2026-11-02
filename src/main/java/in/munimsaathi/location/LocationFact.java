@@ -74,6 +74,8 @@ public class LocationFact {
         this.operationId = operationId;
     }
 
+    public String getLabel() { return label; }
+
     public UUID getId() {
         return id;
     }

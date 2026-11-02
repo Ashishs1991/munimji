@@ -44,7 +44,6 @@ import java.util.UUID;
 public class WhatsAppTurn {
 
     private static final ZoneId ZONE = ZoneId.of("Asia/Kolkata");
-    private static final Set<String> APPROVAL = Set.of("yes", "y", "haan", "han", "ha", "haan ji", "हाँ", "हां");
     private static final Set<String> CANCEL = Set.of("cancel", "ruko", "chhodo");
     private static final Set<String> RESUME = Set.of("resume", "wapas");
 
@@ -123,7 +122,10 @@ public class WhatsAppTurn {
                 transactions.executeWithoutResult(status -> bindApproval(id));
                 prepared = transactions.execute(status -> {
                     Prepared reply = prepare(id);
+                    InboundMessage inbound = messages.findById(id).orElse(null);
+                    if (reply != null && inbound != null && inbound.getUserId() != null && !inbound.isHistorySaved()) remembered(inbound, reply.text());
                     rememberShownProposal(id, reply);
+                    if (reply != null && inbound != null) inbound.rememberReply(reply.text());
                     return reply;
                 });
             } catch (RuntimeException exception) {
@@ -149,6 +151,13 @@ public class WhatsAppTurn {
     }
 
     private void rememberShownProposal(UUID id, Prepared reply) {
+        if (reply != null && reply.text() != null && reply.text().contains(" ko confirm karna baaki hai.")) {
+            InboundMessage inbound = messages.findById(id).orElseThrow();
+            for (ReminderTask task : reminderTasks.findByBusinessIdAndStatusIn(inbound.getBusinessId(),
+                    List.of(ReminderStatus.AWAITING_APPROVAL, ReminderStatus.NEEDS_REAPPROVAL))) {
+                if (reply.text().contains("Reminder " + task.getId())) inbound.offerReminder(task.getId());
+            }
+        }
         if (reply == null || reply.text() == null || !reply.text().contains("Is entry ko confirm karne ke liye")) {
             return;
         }
@@ -164,13 +173,26 @@ public class WhatsAppTurn {
 
     private void bindApproval(UUID id) {
         InboundMessage message = messages.findById(id).orElse(null);
-        if (message == null || message.getStatus() != InboundStatus.STORED || message.getUserId() == null || message.isApprovalBound()) {
+        if (message == null || message.getStatus() != InboundStatus.STORED || message.getUserId() == null || message.isApprovalBound() || message.getReplyText() != null) {
             return;
         }
         if (!approval(message.getBody())) {
             return;
         }
         tenants.inBusiness(message.getUserId(), message.getBusinessId(), () -> {
+            if (interpreter.clarificationPending(message.getUserId())) return null;
+            var latest = messages.latestReply(message.getBusinessId(), message.getUserId(), message.getPhone());
+            if (latest.isPresent()) {
+                InboundMessage previous = latest.get();
+                if (previous.getDraftId() != null && (previous.getProposalShownAt() != null || previous.isApprovalBound())) {
+                    message.bindApproval(previous.getDraftId(), previous.getDraftVersion(), previous.getContentHash());
+                } else if (previous.getReminderTaskId() != null) {
+                    message.bindReminder(previous.getReminderTaskId());
+                } else {
+                    message.bindApproval(null);
+                }
+                return null;
+            }
             var shown = messages.latestShownProposal(message.getBusinessId(), message.getUserId(), message.getPhone());
             if (shown.isPresent()) {
                 InboundMessage proposal = shown.get();
@@ -210,11 +232,12 @@ public class WhatsAppTurn {
     }
 
     private Prepared prepareInBusiness(InboundMessage message) {
+        if (message.getReplyText() != null) return new Prepared(message.getPhone(), message.getReplyText());
         if (message.getPostedDocumentId() != null) {
             return new Prepared(message.getPhone(), "Posted. " + details(message.getUserId(), message.getDraftId()));
         }
         if (message.isApprovalBound()) {
-            return approveBound(message);
+            return remembered(message, approveBound(message).text());
         }
         if (message.getDraftId() != null) {
             return new Prepared(message.getPhone(), details(message.getUserId(), message.getDraftId()));
@@ -234,7 +257,8 @@ public class WhatsAppTurn {
                 return new Prepared(message.getPhone(), "Yeh entry abhi pending nahi hai. Sahi entry ID bhejiye.");
             }
             message.attachDraft(chosen.getId());
-            return new Prepared(message.getPhone(), details(message.getUserId(), chosen.getId()));
+            String question = interpreter.focus(message.getUserId(), chosen.getId());
+            return new Prepared(message.getPhone(), question == null ? details(message.getUserId(), chosen.getId()) : question);
         }
         if (CANCEL.contains(word)) {
             return remembered(message, cancelOpen(message));
@@ -248,7 +272,7 @@ public class WhatsAppTurn {
         if (outcome.draft() != null) {
             message.attachDraft(outcome.draft().id());
         }
-        return remembered(message, reply(outcome));
+        return remembered(message, reply(outcome, message.getUserId()));
     }
 
     private Prepared approveBound(InboundMessage message) {
@@ -278,7 +302,7 @@ public class WhatsAppTurn {
                 message.getDraftVersion(),
                 message.getContentHash()
         );
-        message.recordPosting(documentId);
+        if (stored == null || !"LOCATION".equals(stored.getKind())) message.recordPosting(documentId);
         return new Prepared(message.getPhone(), "Posted. " + details(message.getUserId(), message.getDraftId()));
     }
 
@@ -291,13 +315,20 @@ public class WhatsAppTurn {
         LocalDate day = LocalDate.now(ZONE);
         Instant now = Instant.now();
         if (type.startsWith("audio/")) {
-            var capture = voice.capture(message.getUserId(), type, "whatsapp-voice", bytes, day, now);
+            var capture = voice.capture(message.getUserId(), type, "whatsapp-voice", bytes, day, now, transcript -> {
+                message.useTranscript(transcript);
+                if (approval(transcript)) {
+                    bindApproval(message.getId());
+                    if (message.isApprovalBound()) return new InterpretationOutcome(null, List.of(), null, approveBound(message).text());
+                }
+                return interpreter.interpret(message.getUserId(), transcript, null, day, now);
+            });
             if (capture.draft() != null) {
                 message.attachDraft(capture.draft().id());
             }
             String text = capture.draft() == null
                     ? (capture.answer() == null ? "Namaste. Tell me what was received, sold, or paid." : capture.answer())
-                    : reply(new InterpretationOutcome(capture.draft(), List.of(), null, capture.answer()));
+                    : reply(new InterpretationOutcome(capture.draft(), List.of(), null, capture.answer()), message.getUserId());
             return remembered(message, capture.transcript(), text);
         }
         if (type.startsWith("image/") || "application/pdf".equals(type)) {
@@ -318,7 +349,7 @@ public class WhatsAppTurn {
             if (outcome.draft() != null) {
                 message.attachDraft(outcome.draft().id());
             }
-            return new Prepared(message.getPhone(), reply(outcome));
+            return new Prepared(message.getPhone(), reply(outcome, message.getUserId()));
         }
         return new Prepared(message.getPhone(), "Send a photo, PDF, or voice note.");
     }
@@ -337,12 +368,16 @@ public class WhatsAppTurn {
 
     private Prepared remembered(InboundMessage message, String ownerText, String text) {
         text = HinglishReplies.render(text);
-        memory.remember(message.getUserId(), "owner", ownerText);
-        memory.remember(message.getUserId(), "assistant", text);
+        if (!message.isHistorySaved()) {
+            memory.remember(message.getUserId(), "owner", ownerText);
+            memory.remember(message.getUserId(), "assistant", text);
+            message.markHistorySaved();
+        }
         return new Prepared(message.getPhone(), text);
     }
 
     private String cancelOpen(InboundMessage message) {
+        interpreter.clearDialogue(message.getUserId());
         if (questions.get(message.getUserId()).isPresent()) {
             questions.clear(message.getUserId());
             return "Cancelled the balance question. Nothing was posted.";
@@ -380,7 +415,8 @@ public class WhatsAppTurn {
         ).stream().filter(draft -> !draft.getExpiresAt().isBefore(Instant.now())).toList();
     }
 
-    private String reply(InterpretationOutcome outcome) {
+    private String reply(InterpretationOutcome outcome, UUID userId) {
+        if (outcome.answer() != null && interpreter.offeredQuestionPending(userId)) return outcome.answer();
         if (outcome.draft() != null) {
             Draft pending = draftRows.findById(outcome.draft().id()).orElse(null);
             if (pending != null && "RECEIPT".equals(pending.getKind()) && pending.getStatus() == DraftStatus.NEEDS_CLARIFICATION
@@ -514,6 +550,10 @@ public class WhatsAppTurn {
         List<DraftLine> lines = draftLines.findByDraftIdOrderByLineNumberAsc(draft.getId());
         StringBuilder text = new StringBuilder();
         Party party = draft.getCustomerId() == null ? null : parties.findById(draft.getCustomerId()).orElse(null);
+        if ("LOCATION".equals(draft.getKind())) {
+            String place = draft.getLocationId() == null ? "godown abhi nahi bataya" : godowns.findById(draft.getLocationId()).map(Godown::getName).orElse("unknown godown");
+            return "Jagah ka note: “" + draft.getLocationLabel() + "” — " + place + ". Isse stock ya paise nahi badlenge";
+        }
         if ("PAYMENT".equals(draft.getKind()) || "RECEIVABLE".equals(draft.getKind()) || "PAYABLE".equals(draft.getKind()) || "OUTGOING_PAYMENT".equals(draft.getKind())) {
             return moneyFacts(draft, party);
         }
@@ -629,7 +669,7 @@ public class WhatsAppTurn {
     }
 
     private static boolean approval(String body) {
-        return body != null && APPROVAL.contains(body.trim().toLowerCase(Locale.ROOT));
+        return CommandInterpreter.isApproval(body);
     }
 
     private record Prepared(String phone, String text) {

@@ -211,6 +211,18 @@ public class LocationBook {
     }
 
     @Transactional(readOnly = true)
+    public List<Place> locateLabel(UUID userId, String label) {
+        return facts.findFirstByBusinessIdAndLabelOrderByNotedAtDesc(tenants.currentBusinessId(userId), Names.normalize(label))
+                .map(fact -> List.of(new Place(fact.getLocationId(), BigDecimal.ZERO, false))).orElseGet(List::of);
+    }
+
+    @Transactional(readOnly = true)
+    public List<String> rememberedLabels(UUID userId) {
+        return facts.findTop100ByBusinessIdOrderByNotedAtDesc(tenants.currentBusinessId(userId)).stream()
+                .map(LocationFact::getLabel).distinct().toList();
+    }
+
+    @Transactional(readOnly = true)
     public BigDecimal businessQuantity(UUID userId, UUID productId, UUID locationId) {
         UUID businessId = tenants.currentBusinessId(userId);
         return stock.businessOwnedQuantity(businessId, productId, locationId);

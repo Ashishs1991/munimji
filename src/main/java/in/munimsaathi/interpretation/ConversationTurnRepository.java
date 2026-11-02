@@ -7,5 +7,5 @@ import java.util.UUID;
 
 public interface ConversationTurnRepository extends JpaRepository<ConversationTurn, UUID> {
 
-    List<ConversationTurn> findTop12ByBusinessIdOrderByCreatedAtDesc(UUID businessId);
+    List<ConversationTurn> findTop12ByBusinessIdAndActorIdOrderByCreatedAtDesc(UUID businessId, UUID actorId);
 }

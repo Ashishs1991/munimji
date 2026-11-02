@@ -40,7 +40,7 @@ public class ConversationMemory {
 
     @Transactional(readOnly = true)
     public String recent(UUID userId) {
-        List<ConversationTurn> rows = turns.findTop12ByBusinessIdOrderByCreatedAtDesc(tenants.currentBusinessId(userId));
+        List<ConversationTurn> rows = turns.findTop12ByBusinessIdAndActorIdOrderByCreatedAtDesc(tenants.currentBusinessId(userId), userId);
         List<String> lines = new ArrayList<>();
         for (int index = Math.min(rows.size(), 10) - 1; index >= 0; index--) {
             ConversationTurn row = rows.get(index);

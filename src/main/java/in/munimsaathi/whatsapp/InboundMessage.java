@@ -63,6 +63,17 @@ public class InboundMessage {
     @Column(name = "content_hash")
     private String contentHash;
 
+    @Column(name = "reply_text")
+    private String replyText;
+
+    public String getReplyText() { return replyText; }
+    public void rememberReply(String text) { replyText = text; }
+
+    @Column(name = "reply_sent_at")
+    private Instant replySentAt;
+
+    public Instant getProposalShownAt() { return proposalShownAt; }
+
     @Column(name = "proposal_shown_at")
     private Instant proposalShownAt;
 
@@ -73,6 +84,13 @@ public class InboundMessage {
             contentHash = hash;
         }
     }
+
+    @Column(name = "history_saved", nullable = false)
+    private boolean historySaved;
+
+    public boolean isHistorySaved() { return historySaved; }
+    public void markHistorySaved() { historySaved = true; }
+    public void useTranscript(String transcript) { body = transcript; }
 
     protected InboundMessage() {
     }
@@ -115,6 +133,8 @@ public class InboundMessage {
         this.contentHash = contentHash;
     }
 
+    public void offerReminder(UUID taskId) { this.reminderTaskId = taskId; }
+
     public void bindReminder(UUID taskId) {
         this.approvalBound = true;
         this.reminderTaskId = taskId;
@@ -128,8 +148,9 @@ public class InboundMessage {
         this.replyStatus = replyStatus;
         if ("accepted".equals(replyStatus)) {
             this.status = InboundStatus.REPLIED;
+            replySentAt = Instant.now();
             if (proposalShownAt != null && !approvalBound) {
-                proposalShownAt = Instant.now();
+                proposalShownAt = replySentAt;
             }
         }
     }

@@ -65,6 +65,7 @@ public class CommandInterpreter {
     private final ReminderBook reminders;
     private final ConversationMemory memory;
     private final PendingBalanceQuestions questions;
+    private final DialogueState dialogue;
 
     public CommandInterpreter(
             LanguageModel model,
@@ -79,7 +80,8 @@ public class CommandInterpreter {
             LocationBook locations,
             ReminderBook reminders,
             ConversationMemory memory,
-            PendingBalanceQuestions questions
+            PendingBalanceQuestions questions,
+            DialogueState dialogue
     ) {
         this.model = model;
         this.mapper = mapper;
@@ -94,6 +96,7 @@ public class CommandInterpreter {
         this.reminders = reminders;
         this.memory = memory;
         this.questions = questions;
+        this.dialogue = dialogue;
     }
 
     @Transactional
@@ -106,6 +109,8 @@ public class CommandInterpreter {
         if (text == null || text.isBlank()) {
             throw new IllegalArgumentException("A command is required.");
         }
+        InterpretationOutcome direct = answerQuestion(userId, text, occurredOn, occurredAt);
+        if (direct != null) return traced(userId, text, null, direct);
         TurnContext.set(context(userId));
         String modelText;
         try {
@@ -115,9 +120,10 @@ public class CommandInterpreter {
         }
         JsonNode reply = commandJson(modelText);
         if (reply == null) {
-            return new InterpretationOutcome(null, List.of(), null, modelText.trim());
+            return traced(userId, text, modelText, new InterpretationOutcome(null, List.of(), null, modelText.trim()));
         }
-        return rememberHeard(userId, reply, apply(userId, draftId, reply, occurredOn, occurredAt));
+        reply = prepareTurn(userId, text, singleLine(reply));
+        return traced(userId, text, modelText, finish(userId, rememberHeard(userId, reply, apply(userId, draftId, reply, occurredOn, occurredAt))));
     }
 
     @Transactional
@@ -132,7 +138,250 @@ public class CommandInterpreter {
         if (reply == null) {
             return new InterpretationOutcome(null, List.of(), null, modelJson == null ? "" : modelJson.trim());
         }
-        return rememberHeard(userId, reply, apply(userId, draftId, reply, occurredOn, occurredAt));
+        var extracted = (com.fasterxml.jackson.databind.node.ObjectNode) singleLine(reply).deepCopy();
+        extracted.remove(List.of("create_party", "create_product"));
+        return finish(userId, rememberHeard(userId, extracted, apply(userId, draftId, extracted, occurredOn, occurredAt)));
+    }
+
+    private JsonNode singleLine(JsonNode reply) {
+        JsonNode lines = reply.get("lines");
+        if (lines == null || !lines.isArray() || lines.size() != 1) return reply;
+        var fields = (com.fasterxml.jackson.databind.node.ObjectNode) reply.deepCopy();
+        for (String key : List.of("product_name", "quantity", "unit", "amount_paise")) {
+            if ((fields.get(key) == null || fields.get(key).isNull()) && lines.get(0).hasNonNull(key)) fields.set(key, lines.get(0).get(key));
+        }
+        fields.remove("lines");
+        return fields;
+    }
+
+    private InterpretationOutcome traced(UUID userId, String source, String modelReply, InterpretationOutcome outcome) {
+        UUID id = outcome.draft() == null ? null : outcome.draft().id();
+        dialogue.recordTurn(userId, source, modelReply, id, id == null ? null : drafts.kindOf(userId, id));
+        return outcome;
+    }
+
+    @Transactional(readOnly = true)
+    public boolean clarificationPending(UUID userId) {
+        var state = dialogue.get(userId).orElse(null);
+        UUID focused = focusedDraft(userId);
+        return state != null && focused != null && (state.question() != null
+                || drafts.inspect(userId, focused).getStatus() == in.munimsaathi.draft.DraftStatus.NEEDS_CLARIFICATION);
+    }
+
+    @Transactional(readOnly = true)
+    public boolean offeredQuestionPending(UUID userId) {
+        return dialogue.get(userId).map(state -> state.question() != null && focusedDraft(userId) != null).orElse(false);
+    }
+
+    @Transactional
+    public String focus(UUID userId, UUID draftId) {
+        if (drafts.open(userId).stream().noneMatch(row -> row.id().equals(draftId))) throw new IllegalArgumentException("Entry pending nahi hai.");
+        var draft = drafts.inspect(userId, draftId);
+        var proposal = new DraftProposal(draft.getId(), draft.getVersion(), draft.getContentHash(), draft.getStatus(),
+                draft.getMissingFields().isBlank() ? List.of() : List.of(draft.getMissingFields().split(",")), draft.getAmountPaise());
+        return finish(userId, new InterpretationOutcome(proposal, List.of(), null, null)).answer();
+    }
+
+    @Transactional
+    public void clearDialogue(UUID userId) { dialogue.clear(userId); }
+
+    private UUID focusedDraft(UUID userId) {
+        var state = dialogue.get(userId).orElse(null);
+        if (state == null) return null;
+        return drafts.open(userId).stream().filter(row -> row.id().equals(state.draftId())).map(DraftBook.OpenDraft::id).findFirst().orElse(null);
+    }
+
+    private InterpretationOutcome finish(UUID userId, InterpretationOutcome outcome) {
+        if (outcome.draft() == null) return outcome;
+        var draft = drafts.inspect(userId, outcome.draft().id());
+        dialogue.save(userId, draft.getId(), null, null, null);
+        if (draft.getStatus() != in.munimsaathi.draft.DraftStatus.NEEDS_CLARIFICATION || "LOCATION".equals(draft.getKind())) return outcome;
+        if (draft.getKind() == null && (draft.getDisplayQuantity() != null || draft.getHeardProduct() != null)) {
+            dialogue.save(userId, draft.getId(), "STOCK_ACTION", null, null);
+            return withAnswer(outcome, "Quantity aur maal ki baat samajh gaya. Kya naya maal aaya hai, bika hai, ya sirf uski jagah note karni hai? Stock abhi nahi badla.");
+        }
+        if (draft.getCustomerId() == null && draft.getHeardParty() != null) {
+            var named = parties.findByName(userId, draft.getHeardParty());
+            if (named.size() == 1 && ("RECEIPT".equals(draft.getKind()) || "SALE".equals(draft.getKind()))) {
+                String role = "RECEIPT".equals(draft.getKind()) ? "supplier" : "customer";
+                dialogue.save(userId, draft.getId(), "USE_PARTY", named.get(0).getDisplayName(), role);
+                return withAnswer(outcome, questionForDraft(userId, draft.getId(), "USE_PARTY", named.get(0).getDisplayName(), role));
+            }
+        }
+        if (draft.getCustomerId() == null && draft.getHeardParty() != null && parties.findByName(userId, draft.getHeardParty()).isEmpty()) {
+            Party close = closeParty(userId, draft.getHeardParty());
+            if (close != null) {
+                dialogue.save(userId, draft.getId(), "MATCH_PARTY", close.getDisplayName(), null);
+                return withAnswer(outcome, partyNote(userId, draft.getHeardParty(), "RECEIPT".equals(draft.getKind()))
+                        + " Kya wahi party hai? Haan ya sahi naam bataiye.");
+            }
+            dialogue.save(userId, draft.getId(), "CREATE_PARTY", draft.getHeardParty(), null);
+            return withAnswer(outcome, questionForDraft(userId, draft.getId(), "CREATE_PARTY", draft.getHeardParty(), null));
+        }
+        if (("RECEIPT".equals(draft.getKind()) || "SALE".equals(draft.getKind())) && draft.getProductId() == null
+                && draft.getHeardProduct() != null && catalog.candidates(userId, draft.getHeardProduct()).isEmpty()) {
+            String kind = draft.getUnitLabel() == null ? "PRODUCT_UNIT" : "CREATE_PRODUCT";
+            dialogue.save(userId, draft.getId(), kind, draft.getHeardProduct(), draft.getUnitLabel());
+            return withAnswer(outcome, questionForDraft(userId, draft.getId(), kind, draft.getHeardProduct(), draft.getUnitLabel()));
+        }
+        return outcome;
+    }
+
+    private static InterpretationOutcome withAnswer(InterpretationOutcome outcome, String answer) {
+        return new InterpretationOutcome(outcome.draft(), outcome.refusedTools(), outcome.ewayDraftId(), answer);
+    }
+
+    private String questionForDraft(UUID userId, UUID draftId, String question, String name, String unit) {
+        var draft = drafts.inspect(userId, draftId);
+        StringBuilder facts = new StringBuilder();
+        if (draft.getDisplayQuantity() != null) facts.append(draft.getDisplayQuantity().stripTrailingZeros().toPlainString()).append(" ").append(draft.getUnitLabel()).append(" ");
+        if (draft.getHeardProduct() != null) facts.append(draft.getHeardProduct()).append(" ");
+        if (draft.getLocationId() != null) godowns.findById(draft.getLocationId()).ifPresent(place -> facts.append("— ").append(place.getName()).append(" "));
+        if (draft.getAmountPaise() != null) facts.append("₹").append(BigDecimal.valueOf(draft.getAmountPaise(), 2).toPlainString()).append(" ");
+        String text = creationQuestion(question, name, unit);
+        if ("CREATE_PARTY".equals(question) && "RECEIPT".equals(draft.getKind())) text = text.replace("nayi party", "nayi supplier party");
+        return (facts.isEmpty() ? "" : "Samjha: " + facts.toString().trim() + ". ") + text;
+    }
+
+    private String creationQuestion(String question, String name, String unit) {
+        if ("USE_PARTY".equals(question)) return "“" + name + "” saved hai, lekin is entry ke liye " + unit + " role chahiye. Kya inhe " + unit + " bhi maan kar wahi party use karun? Haan ya doosri party ka naam batayein. Paise abhi nahi badlenge.";
+        if ("CREATE_PARTY".equals(question)) return "“" + name + "” saved parties mein nahi hai. Kya is naam ki nayi party banaun? Haan bolein, ya purani party ka saved naam batayein. Baaki entry yaad hai.";
+        if ("PRODUCT_UNIT".equals(question)) return "“" + name + "” naya product banana ho to stock kis base unit mein ginein—bori, kg ya pieces?";
+        return "“" + name + "” catalog mein nahi hai. Kya ise naya product banaun, jiska stock “" + unit + "” mein ginen? Haan bolein, ya saved product ka naam batayein. Quantity aur godown yaad hain.";
+    }
+
+    private InterpretationOutcome answerQuestion(UUID userId, String source, LocalDate day, Instant at) {
+        var state = dialogue.get(userId).orElse(null);
+        UUID focused = focusedDraft(userId);
+        if (state == null || focused == null) return null;
+        String words = cleanWords(source);
+        var current = drafts.inspect(userId, focused);
+        DraftProposal proposal = new DraftProposal(current.getId(), current.getVersion(), current.getContentHash(), current.getStatus(),
+                current.getMissingFields().isBlank() ? List.of() : List.of(current.getMissingFields().split(",")), current.getAmountPaise());
+        InterpretationOutcome same = new InterpretationOutcome(proposal, List.of(), null, null);
+        if (state.question() == null) {
+            if (isApproval(source) && current.getStatus() == in.munimsaathi.draft.DraftStatus.NEEDS_CLARIFICATION) {
+                return withAnswer(same, "Is draft mein abhi " + current.getMissingFields() + " clear karna hai. Pehle yeh detail bataiye; entry post nahi hui.");
+            }
+            return null;
+        }
+        if (current.getVersion() != state.version()) {
+            dialogue.clear(userId);
+            return finish(userId, withAnswer(same, "Is draft ki detail badal gayi hai. Naya draft dekh kar confirm karein."));
+        }
+        boolean hasYes = words.matches(".*(?:^| )(?:haan|han|ha|yes|हाँ|हां)(?: |$).*");
+        boolean hasNo = words.matches(".*(?:^| )(?:nahi|nahin|no|नहीं|नही)(?: |$).*");
+        if (hasYes && hasNo) {
+            return withAnswer(same, "CREATE_PARTY".equals(state.question())
+                    ? "Kya nayi party banani hai ya purani party hai? ‘Haan, nayi party banao’ ya ‘Nahi, purani party hai’ bataiye. Entry abhi post nahi hui."
+                    : "Naya product banana hai ya purana product hai? ‘Haan, naya banao’ ya ‘Nahi, purana hai’ bataiye. Entry abhi post nahi hui.");
+        }
+        if (Set.of("no", "nahi", "nahin", "नहीं", "नही").contains(words)) {
+            String next = state.question().contains("PARTY") ? "PARTY_NAME" : "PRODUCT_NAME";
+            dialogue.save(userId, focused, next, state.name(), state.unit());
+            return withAnswer(same, "Theek hai, naya record nahi banaunga. Purani " + ("PARTY_NAME".equals(next) ? "party" : "product") + " ka saved naam bataiye; baaki entry yaad hai.");
+        }
+        if ("PRODUCT_UNIT".equals(state.question()) && Set.of("bori", "बोरी", "kg", "किलो", "piece", "pieces", "पीस", "box", "बॉक्स").contains(words)) {
+            dialogue.save(userId, focused, "CREATE_PRODUCT", state.name(), words);
+            return withAnswer(same, questionForDraft(userId, focused, "CREATE_PRODUCT", state.name(), words));
+        }
+        if ("STOCK_ACTION".equals(state.question())) {
+            String action = switch (words) {
+                case "maal aaya", "naya maal aaya", "received", "purchase", "माल आया", "नया माल आया", "माल आया है" -> "goods_received";
+                case "maal bika", "sale", "bika", "माल बिका", "बिक्री हुई" -> "sale";
+                case "sirf jagah", "location", "sirf location", "सिर्फ जगह", "जगह नोट करनी है" -> "remember_location";
+                default -> null;
+            };
+            if (action != null) {
+                var fields = mapper.createObjectNode();
+                fields.put("turn", "answer_to_clarification"); fields.put("target_draft_id", focused.toString()); fields.put("action", action);
+                if (current.getHeardParty() != null) fields.put("party_name", current.getHeardParty());
+                if (current.getHeardProduct() != null) fields.put("product_name", current.getHeardProduct());
+                if (current.getHeardLocation() != null) fields.put("location_code", current.getHeardLocation());
+                if ("remember_location".equals(action)) fields.put("location_label", current.getHeardProduct() == null ? null
+                        : (current.getHeardParty() == null ? "" : current.getHeardParty() + " ka ") + current.getHeardProduct());
+                dialogue.clear(userId);
+                return finish(userId, rememberHeard(userId, fields, apply(userId, focused, fields, day, at)));
+            }
+            if (isApproval(source)) return withAnswer(same, "Sirf Haan se action clear nahi hai. Maal aaya, bika, ya sirf jagah note karni hai?");
+        }
+        String withoutPrefix = words.replaceFirst("^(?:product|party|maal|प्रोडक्ट|पार्टी) +", "");
+        boolean namedMatch = "MATCH_PARTY".equals(state.question()) && state.name() != null && cleanWords(state.name()).equals(withoutPrefix);
+        if (!namedMatch && state.name() != null && cleanWords(state.name()).equals(withoutPrefix)) {
+            String question = "PARTY_NAME".equals(state.question()) ? "CREATE_PARTY"
+                    : "PRODUCT_NAME".equals(state.question()) ? (state.unit() == null ? "PRODUCT_UNIT" : "CREATE_PRODUCT") : state.question();
+            dialogue.save(userId, focused, question, state.name(), state.unit());
+            return withAnswer(same, questionForDraft(userId, focused, question, state.name(), state.unit()));
+        }
+        boolean yes = namedMatch || Set.of("yes", "y", "haan", "han", "ha", "हाँ", "हां", "haan ji", "हाँ जी", "हां जी", "haan bana do", "haan jod do", "bana do", "jod do", "हाँ बना दो", "हाँ जोड़ दो", "haan nayi party banao", "haan naya product banao", "हाँ नई पार्टी बनाओ", "हाँ नया प्रोडक्ट बनाओ", "theek hai", "ठीक है").contains(words);
+        if (!yes && hasYes && !hasNo && state.name() != null) {
+            String name = cleanWords(state.name());
+            yes = Set.of("haan nayi party hai " + name, "हां नई पार्टी है " + name, "हाँ नई पार्टी है " + name,
+                    "haan naya product hai " + name, "हाँ नया प्रोडक्ट है " + name).contains(words);
+        }
+        if (!yes) return null;
+        if (!"CREATE_PARTY".equals(state.question()) && !"CREATE_PRODUCT".equals(state.question()) && !"MATCH_PARTY".equals(state.question()) && !"USE_PARTY".equals(state.question())) {
+            return withAnswer(same, "Pehle " + ("PRODUCT_UNIT".equals(state.question()) ? "base unit" : "saved naam") + " bataiye; Haan se yeh detail nahi milti.");
+        }
+        var fields = mapper.createObjectNode();
+        fields.put("turn", "answer_to_clarification");
+        fields.put("target_draft_id", focused.toString());
+        if ("CREATE_PARTY".equals(state.question()) || "MATCH_PARTY".equals(state.question()) || "USE_PARTY".equals(state.question())) {
+            if ("USE_PARTY".equals(state.question())) {
+                var named = parties.findByName(userId, state.name());
+                if (named.size() != 1) return withAnswer(same, "Party ab ambiguous hai. Poora saved naam batayein.");
+                parties.changeRole(userId, named.get(0).getId(), PartyRole.BOTH);
+            }
+            fields.put("party_name", state.name());
+            if ("CREATE_PARTY".equals(state.question())) fields.put("create_party", true);
+        } else {
+            fields.put("product_name", state.name()); fields.put("unit", state.unit()); fields.put("create_product", true);
+        }
+        dialogue.clear(userId);
+        return finish(userId, rememberHeard(userId, fields, apply(userId, focused, fields, day, at)));
+    }
+
+    private JsonNode prepareTurn(UUID userId, String source, JsonNode reply) {
+        var fields = (com.fasterxml.jackson.databind.node.ObjectNode) reply.deepCopy();
+        String words = cleanWords(source);
+        boolean storage = words.matches(".*(?:rakha|rakhe|pada|रखा|रखे|पड़ा|पड़ा).*")
+                && words.matches(".*(?:godown|godam|गोदाम|गोडाउन).*");
+        boolean arrival = words.matches(".*(?:^| )(?:liya|kharida|aaya|received|purchase|bought|लिया|खरीदा|आया|आए)(?: |$).*");
+        boolean query = words.matches(".*(?:^| )(?:kahan|kahaan|कहाँ|कहां|where)(?: |$).*");
+        if (storage && !arrival && !query && !"answer_to_clarification".equals(text(fields, "turn"))
+                && !source.split("(?iu)godown|godam|गोदाम|गोडाउन", 2)[0].isBlank()) {
+            String label = text(fields, "location_label");
+            if (label == null) {
+                label = source.split("(?iu)godown|godam|गोदाम|गोडाउन", 2)[0].strip();
+                label = label.replaceAll("[\\p{P}\\p{Cf}]+$", "").trim();
+            }
+            fields.put("action", "remember_location"); fields.put("turn", "new_action"); fields.put("location_label", label);
+            fields.remove(List.of("lines", "create_party", "create_product", "target_draft_id"));
+        }
+        UUID focused = focusedDraft(userId);
+        if (focused != null && "LOCATION".equals(drafts.kindOf(userId, focused))
+                && "answer_to_clarification".equals(text(fields, "turn"))
+                && firstText(fields, "action", "intent") == null
+                && (fields.hasNonNull("product_name") || fields.hasNonNull("quantity"))) {
+            var note = drafts.inspect(userId, focused);
+            if (!fields.hasNonNull("location_code") && note.getLocationId() != null) {
+                godowns.findById(note.getLocationId()).ifPresent(place -> fields.put("location_code", place.getCode()));
+            }
+            if (!fields.hasNonNull("party_name") && note.getHeardParty() != null) fields.put("party_name", note.getHeardParty());
+            drafts.suspend(userId, focused);
+            fields.put("turn", "new_action"); fields.remove("target_draft_id");
+        }
+        String turn = text(fields, "turn");
+        if ("new_action".equals(turn) || "read_query".equals(turn)) dialogue.clear(userId);
+        return fields;
+    }
+
+    public static boolean isApproval(String source) {
+        return source != null && Set.of("yes", "y", "haan", "han", "ha", "haan ji", "han ji", "हाँ", "हां", "हाँ जी", "हां जी").contains(cleanWords(source));
+    }
+
+    private static String cleanWords(String source) {
+        return source.toLowerCase(Locale.ROOT).replaceAll("[\\p{P}\\p{Cf}]", " ").trim().replaceAll("\\s+", " ");
     }
 
     private InterpretationOutcome rememberHeard(UUID userId, JsonNode reply, InterpretationOutcome outcome) {
@@ -152,6 +401,7 @@ public class CommandInterpreter {
         List<String> refused = refusedTools(reply);
         String turn = text(reply, "turn");
         if ("cancel".equals(turn)) {
+            dialogue.clear(userId);
             boolean pendingQuestion = questions.get(userId).isPresent();
             questions.clear(userId);
             if (pendingQuestion && draftId == null && text(reply, "target_draft_id") == null) {
@@ -160,7 +410,7 @@ public class CommandInterpreter {
             return new InterpretationOutcome(null, refused, null, cancelDraft(userId, draftId, text(reply, "target_draft_id")));
         }
         String target = text(reply, "target_draft_id");
-        if (target != null && !"new_action".equals(turn)) {
+        if (target != null && ("answer_to_clarification".equals(turn) || "edit_action".equals(turn))) {
             UUID selected;
             try { selected = UUID.fromString(target); }
             catch (IllegalArgumentException invalid) { throw new IllegalArgumentException("Sahi pending entry chuniye."); }
@@ -196,6 +446,41 @@ public class CommandInterpreter {
             case "outgoing_payment", "money_paid", "supplier_payment" -> "outgoing_payment";
             default -> null;
         };
+        if ("remember_location".equals(normalized)) {
+            UUID selected = draftId;
+            if (selected == null && "answer_to_clarification".equals(turn)) selected = focusedDraft(userId);
+            if (selected != null && drafts.kindOf(userId, selected) != null && !"LOCATION".equals(drafts.kindOf(userId, selected))) {
+                if ("edit_action".equals(turn)) drafts.suspend(userId, selected);
+                selected = null;
+            }
+            return new InterpretationOutcome(drafts.proposeLocation(userId, selected, text(reply, "location_label"),
+                    location(userId, text(reply, "location_code")), occurredOn, occurredAt), refused, ewayDraftId, null);
+        }
+        if (action == null && normalized.isBlank() && "answer_to_clarification".equals(turn)) {
+            UUID note = draftId == null ? focusedDraft(userId) : draftId;
+            if (note != null && "LOCATION".equals(drafts.kindOf(userId, note))) {
+                return new InterpretationOutcome(drafts.proposeLocation(userId, note, text(reply, "location_label"),
+                        location(userId, text(reply, "location_code")), occurredOn, occurredAt), refused, ewayDraftId, null);
+            }
+        }
+        if (("locate_goods".equals(normalized) || "locate".equals(normalized)) && text(reply, "location_label") != null) {
+            var places = locations.locateLabel(userId, text(reply, "location_label"));
+            if (places.isEmpty()) {
+                UUID knownProduct = product(userId, firstText(reply, "product_name", "location_label"));
+                if (knownProduct != null) {
+                    var stockPlaces = locations.locate(userId, knownProduct);
+                    String stockAnswer = stockPlaces.isEmpty() ? "Is product ki jagah abhi record mein nahi hai."
+                            : stockPlaces.stream().map(place -> godowns.findById(place.locationId()).map(Godown::getName).orElse("Unknown godown")
+                            + (place.currentlyStocked() ? " mein stock hai." : " mein last note kiya tha; abhi stock confirm nahi hai."))
+                            .collect(java.util.stream.Collectors.joining(" "));
+                    return new InterpretationOutcome(null, refused, ewayDraftId, stockAnswer);
+                }
+            }
+            String answer = places.isEmpty() ? "Is label ki jagah abhi record mein nahi hai."
+                    : places.stream().map(place -> godowns.findById(place.locationId()).map(Godown::getName).orElse("Unknown godown"))
+                    .collect(java.util.stream.Collectors.joining(", ")) + " mein last note kiya tha. Stock ki quantity is note se confirm nahi hoti.";
+            return new InterpretationOutcome(null, refused, ewayDraftId, answer);
+        }
         boolean balanceQuery = "party_balance".equals(normalized) || "balance".equals(normalized)
                 || "confirm_existing_debt".equals(normalized);
         var pending = questions.get(userId).orElse(null);
@@ -222,6 +507,10 @@ public class CommandInterpreter {
             questions.clear(userId);
         }
         if ("answer_to_clarification".equals(turn) && draftId == null) {
+            UUID focused = focusedDraft(userId);
+            if (focused != null && (action == null || kindOf(action).equals(drafts.kindOf(userId, focused)))) draftId = focused;
+        }
+        if ("answer_to_clarification".equals(turn) && draftId == null) {
             var candidates = drafts.open(userId).stream()
                     .filter(open -> action == null || kindOf(action).equals(open.kind())).toList();
             if (candidates.size() == 1) draftId = candidates.get(0).id();
@@ -241,8 +530,9 @@ public class CommandInterpreter {
             }
         }
         UUID customerId;
-        boolean outgoing = "outgoing_payment".equals(action) || (action == null && drafts.open(userId).size() == 1
-                && "OUTGOING_PAYMENT".equals(drafts.open(userId).get(0).kind()));
+        boolean outgoing = "outgoing_payment".equals(action) || (action == null &&
+                (draftId != null ? "OUTGOING_PAYMENT".equals(drafts.kindOf(userId, draftId))
+                        : drafts.open(userId).size() == 1 && "OUTGOING_PAYMENT".equals(drafts.open(userId).get(0).kind())));
         if (outgoing && text(reply, "party_name") != null) {
             var named = parties.findByName(userId, text(reply, "party_name"));
             customerId = named.size() == 1 ? named.get(0).getId() : null;
@@ -293,6 +583,7 @@ public class CommandInterpreter {
         }
         String method = text(reply, "payment_method");
         String purpose = text(reply, "payment_purpose");
+        if (purpose == null && outgoing && draftId != null) purpose = drafts.inspect(userId, draftId).getCause();
         if ("outgoing_payment".equals(action) && "edit_action".equals(turn)
                 && drafts.open(userId).stream().noneMatch(d -> "OUTGOING_PAYMENT".equals(d.kind()))) {
             UUID namedParty = customerId;
@@ -325,7 +616,7 @@ public class CommandInterpreter {
             return new InterpretationOutcome(null, refused, ewayDraftId, "That amount is not the balance I have. Say the new amount if it is new.");
         }
         if (Boolean.TRUE.equals(flag(reply, "create_party")) && customerId == null && text(reply, "party_name") != null) {
-            PartyRole role = outgoing ? PartyRole.BOTH : supplier ? PartyRole.SUPPLIER : PartyRole.CUSTOMER;
+            PartyRole role = outgoing ? ("loan".equals(purpose) ? PartyRole.CUSTOMER : PartyRole.SUPPLIER) : supplier ? PartyRole.SUPPLIER : PartyRole.CUSTOMER;
             customerId = parties.create(userId, text(reply, "party_name"), role).getId();
         }
         if (Boolean.TRUE.equals(flag(reply, "create_product")) && productId == null && text(reply, "product_name") != null) {
@@ -366,6 +657,11 @@ public class CommandInterpreter {
         if (bound == null && action == null && amount != null && productId == null && locationId == null && quantity == null && unit == null) {
             return new InterpretationOutcome(null, refused, ewayDraftId, "₹" + BigDecimal.valueOf(amount, 2).toPlainString()
                     + " ki baat hai. Paise mile hain, diye hain, ya lene/dene baaki hain?");
+        }
+        if (bound != null) {
+            drafts.forgetResolved(userId, bound, text(reply, "party_name") != null && customerId == null,
+                    text(reply, "product_name") != null && productId == null,
+                    text(reply, "location_code") != null && locationId == null);
         }
         String boundKind = bound == null ? null : drafts.kindOf(userId, bound);
         boolean moneyDraft = money || "PAYMENT".equals(boundKind) || "RECEIVABLE".equals(boundKind) || "PAYABLE".equals(boundKind) || "OUTGOING_PAYMENT".equals(boundKind);
@@ -810,6 +1106,9 @@ public class CommandInterpreter {
 
     private String context(UUID userId) {
         StringBuilder text = new StringBuilder();
+        dialogue.get(userId).ifPresent(state -> text.append("focused conversation: draft_id=").append(state.draftId())
+                .append(" question=").append(state.question()).append(" proposed_name=").append(state.name())
+                .append(" proposed_unit=").append(state.unit()).append("\n"));
         text.append("now=").append(LocalDate.now(ZoneId.of("Asia/Kolkata")));
         questions.get(userId).ifPresent(question -> text.append("\npending balance question: party=")
                 .append(question.partyName()).append(" side=").append(question.side())
@@ -837,6 +1136,7 @@ public class CommandInterpreter {
             }
         }
         text.append("\nproducts (first 100; absence does not prove a product is new):").append(catalog.interpretationContext(userId));
+        text.append("\nremembered location labels:").append(locations.rememberedLabels(userId));
         text.append("\ngodowns:");
         for (Godown godown : godowns.findByBusinessIdOrderByCodeAsc(tenants.currentBusinessId(userId))) {
             text.append("\ncode=").append(godown.getCode()).append(" name=").append(godown.getName());
@@ -866,7 +1166,8 @@ public class CommandInterpreter {
         }
         if (draftId != null) {
             var selected = open.stream().filter(row -> row.id().equals(draftId)).findFirst().orElse(null);
-            if (selected != null && (action == null || kindOf(action).equals(selected.kind()))) return selected.id();
+            if (selected != null && (action == null || kindOf(action).equals(selected.kind())
+                    || selected.kind() == null && ("receive".equals(action) || "sale".equals(action)))) return selected.id();
         }
         boolean locationOnly = action == null && locationId != null && quantity == null && unit == null
                 && amount == null && customerId == null && productId == null && method == null;
@@ -883,13 +1184,14 @@ public class CommandInterpreter {
         }
         if (draftId != null) {
             DraftBook.OpenDraft selected = open.stream().filter(draft -> draft.id().equals(draftId)).findFirst().orElse(null);
-            if (selected != null && action != null && !kindOf(action).equals(selected.kind())) {
+            if (selected != null && action != null && selected.kind() != null && !kindOf(action).equals(selected.kind())) {
                 if (money(kindOf(action))) {
                     drafts.suspend(userId, selected.id());
                 }
                 return null;
             }
-            if (selected != null && (action == null || kindOf(action).equals(selected.kind()))) {
+            if (selected != null && (action == null || kindOf(action).equals(selected.kind())
+                    || selected.kind() == null && ("receive".equals(action) || "sale".equals(action)))) {
                 return selected.id();
             }
         }
@@ -1034,10 +1336,26 @@ public class CommandInterpreter {
 
     private static String godownNumber(String value) {
         if (value == null) return null;
-        var match = java.util.regex.Pattern.compile("(?iu)^(?:godown|godam|गोदाम|गोडाउन|गोडाम|g)\\s*(?:no\\.?|number|नंबर|नम्बर)?\\s*([0-9०-९]+)$").matcher(value.trim());
+        var match = java.util.regex.Pattern.compile("(?iu)^(?:godown|godam|गोदाम|गोडाउन|गोडाम|g)\\s*(?:no\\.?|number|नंबर|नम्बर)?\\s*(.+)$").matcher(value.trim());
         if (!match.matches()) return null;
+        String number = cleanWords(match.group(1));
+        String wordNumber = switch (number) {
+            case "one", "वन", "एक" -> "1";
+            case "two", "टू", "दो" -> "2";
+            case "three", "थ्री", "तीन" -> "3";
+            case "four", "चार", "फोर" -> "4";
+            case "five", "पांच", "पाँच", "फाइव" -> "5";
+            case "six", "छह", "सिक्स" -> "6";
+            case "seven", "सात", "सेवन" -> "7";
+            case "eight", "आठ", "एट" -> "8";
+            case "nine", "नौ", "नाइन" -> "9";
+            case "ten", "दस", "टेन" -> "10";
+            default -> null;
+        };
+        if (wordNumber != null) return wordNumber;
+        if (!number.matches("[0-9०-९]+")) return null;
         StringBuilder digits = new StringBuilder();
-        match.group(1).codePoints().forEach(c -> digits.append(Character.digit(c, 10)));
+        number.codePoints().forEach(c -> digits.append(Character.digit(c, 10)));
         return new java.math.BigInteger(digits.toString()).toString();
     }
 
