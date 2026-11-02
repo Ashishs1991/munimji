@@ -72,6 +72,8 @@ public class Product {
         return businessId;
     }
 
+    public boolean isActive() { return active; }
+
     public String getSku() {
         return sku;
     }

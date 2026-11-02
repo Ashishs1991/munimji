@@ -117,7 +117,7 @@ public class CommandInterpreter {
         if (reply == null) {
             return new InterpretationOutcome(null, List.of(), null, modelText.trim());
         }
-        return apply(userId, draftId, reply, occurredOn, occurredAt);
+        return rememberHeard(userId, reply, apply(userId, draftId, reply, occurredOn, occurredAt));
     }
 
     @Transactional
@@ -132,7 +132,14 @@ public class CommandInterpreter {
         if (reply == null) {
             return new InterpretationOutcome(null, List.of(), null, modelJson == null ? "" : modelJson.trim());
         }
-        return apply(userId, draftId, reply, occurredOn, occurredAt);
+        return rememberHeard(userId, reply, apply(userId, draftId, reply, occurredOn, occurredAt));
+    }
+
+    private InterpretationOutcome rememberHeard(UUID userId, JsonNode reply, InterpretationOutcome outcome) {
+        if (outcome.draft() != null) {
+            drafts.rememberHeard(userId, outcome.draft().id(), text(reply, "party_name"), text(reply, "product_name"), text(reply, "location_code"));
+        }
+        return outcome;
     }
 
     private InterpretationOutcome apply(
@@ -151,6 +158,15 @@ public class CommandInterpreter {
                 return new InterpretationOutcome(null, refused, null, "Cancelled the balance question. Nothing was posted.");
             }
             return new InterpretationOutcome(null, refused, null, cancelDraft(userId, draftId, text(reply, "target_draft_id")));
+        }
+        String target = text(reply, "target_draft_id");
+        if (target != null && !"new_action".equals(turn)) {
+            UUID selected;
+            try { selected = UUID.fromString(target); }
+            catch (IllegalArgumentException invalid) { throw new IllegalArgumentException("Sahi pending entry chuniye."); }
+            boolean allowed = drafts.open(userId).stream().anyMatch(open -> open.id().equals(selected));
+            if (!allowed) throw new IllegalArgumentException("Yeh entry is business mein pending nahi hai.");
+            draftId = selected;
         }
         var pendingPurpose = questions.get(userId).orElse(null);
         String causeAnswer = text(reply, "cause");
@@ -205,11 +221,23 @@ public class CommandInterpreter {
         if (action != null && !"answer_to_clarification".equals(turn)) {
             questions.clear(userId);
         }
+        if ("answer_to_clarification".equals(turn) && draftId == null) {
+            var candidates = drafts.open(userId).stream()
+                    .filter(open -> action == null || kindOf(action).equals(open.kind())).toList();
+            if (candidates.size() == 1) draftId = candidates.get(0).id();
+            else if (candidates.size() > 1) {
+                return new InterpretationOutcome(null, refused, ewayDraftId,
+                        "Kaunsi pending entry ki baat hai? Entry ID ke saath batayein: "
+                                + candidates.stream().map(row -> row.id().toString()).collect(java.util.stream.Collectors.joining(", ")));
+            }
+        }
         boolean supplier = "receive".equals(action) || "payable".equals(action);
         if (action == null && "answer_to_clarification".equals(turn)) {
             var open = drafts.open(userId);
-            if (open.size() == 1) {
-                supplier = "RECEIPT".equals(open.get(0).kind()) || "PAYABLE".equals(open.get(0).kind());
+            UUID selectedId = draftId;
+            var selected = open.stream().filter(row -> selectedId == null || row.id().equals(selectedId)).toList();
+            if (selected.size() == 1) {
+                supplier = "RECEIPT".equals(selected.get(0).kind()) || "PAYABLE".equals(selected.get(0).kind());
             }
         }
         UUID customerId;
@@ -242,7 +270,7 @@ public class CommandInterpreter {
             for (JsonNode node : lineNodes) {
                 specs.add(lineSpec(userId, node));
             }
-            UUID lineTarget = draftId;
+            UUID lineTarget = bindDraft(userId, draftId, turn, action, customerId, productId, locationId, quantity, unit, amount, null);
             if (draftId != null && action != null) {
                 String openKind = drafts.kindOf(userId, draftId);
                 String nextKind = kindOf(action);
@@ -281,7 +309,9 @@ public class CommandInterpreter {
             draftId = null;
         }
         boolean stated = action != null || customerId != null || productId != null || locationId != null
-                || quantity != null || unit != null || amount != null || method != null || purpose != null;
+                || quantity != null || unit != null || amount != null || method != null || purpose != null
+                || Boolean.TRUE.equals(flag(reply, "create_party")) || Boolean.TRUE.equals(flag(reply, "create_product"))
+                || ("answer_to_clarification".equals(turn) && (text(reply, "party_name") != null || text(reply, "product_name") != null));
         if (!stated) {
             return new InterpretationOutcome(null, refused, ewayDraftId, spoken(reply));
         }
@@ -297,6 +327,18 @@ public class CommandInterpreter {
         if (Boolean.TRUE.equals(flag(reply, "create_party")) && customerId == null && text(reply, "party_name") != null) {
             PartyRole role = outgoing ? PartyRole.BOTH : supplier ? PartyRole.SUPPLIER : PartyRole.CUSTOMER;
             customerId = parties.create(userId, text(reply, "party_name"), role).getId();
+        }
+        if (Boolean.TRUE.equals(flag(reply, "create_product")) && productId == null && text(reply, "product_name") != null) {
+            String selectedKind = draftId == null ? null : drafts.kindOf(userId, draftId);
+            if (!("receive".equals(action) || "sale".equals(action)
+                    || (action == null && ("RECEIPT".equals(selectedKind) || "SALE".equals(selectedKind))))) {
+                return new InterpretationOutcome(null, refused, ewayDraftId, "Naya product jodne ke liye maal ki pending entry chuniye.");
+            }
+            if (unit == null) {
+                return new InterpretationOutcome(null, refused, ewayDraftId, "Naya product kis base unit mein rakhein—bori, kg ya pieces? Unit bataiye.");
+            }
+            productId = catalog.registerProduct(userId, "WA-" + UUID.randomUUID(), text(reply, "product_name"),
+                    null, null, unit, false).getId();
         }
         boolean locationOnly = action == null && locationId != null && quantity == null && unit == null
                 && amount == null && customerId == null && productId == null && method == null;
@@ -780,21 +822,24 @@ public class CommandInterpreter {
         List<DraftBook.OpenDraft> open = drafts.open(userId);
         if (!open.isEmpty()) {
             text.append("\nopen drafts:");
-            for (DraftBook.OpenDraft draft : open) {
-                text.append('\n').append(draft.id()).append(' ').append(draft.kind()).append(" party_id=").append(draft.partyId()).append(" amount_paise=").append(draft.amountPaise()).append(" missing=").append(draft.missing());
-            }
+            text.append(drafts.openContext(userId));
         }
         List<Party> known = parties.list(userId);
         if (!known.isEmpty()) {
             text.append("\nparties:");
             int count = 0;
             for (Party party : known) {
-                if (count == 20) {
+                if (count == 100) {
                     break;
                 }
                 text.append(' ').append(party.getDisplayName()).append(" id=").append(party.getId()).append(" [").append(party.getRole()).append("]");
                 count++;
             }
+        }
+        text.append("\nproducts (first 100; absence does not prove a product is new):").append(catalog.interpretationContext(userId));
+        text.append("\ngodowns:");
+        for (Godown godown : godowns.findByBusinessIdOrderByCodeAsc(tenants.currentBusinessId(userId))) {
+            text.append("\ncode=").append(godown.getCode()).append(" name=").append(godown.getName());
         }
         return text.toString();
     }
@@ -818,6 +863,10 @@ public class CommandInterpreter {
                 suspendDifferent(userId, open, kindOf(action));
             }
             return null;
+        }
+        if (draftId != null) {
+            var selected = open.stream().filter(row -> row.id().equals(draftId)).findFirst().orElse(null);
+            if (selected != null && (action == null || kindOf(action).equals(selected.kind()))) return selected.id();
         }
         boolean locationOnly = action == null && locationId != null && quantity == null && unit == null
                 && amount == null && customerId == null && productId == null && method == null;
@@ -976,9 +1025,20 @@ public class CommandInterpreter {
         UUID businessId = tenants.currentBusinessId(userId);
         String wanted = code.toLowerCase(Locale.ROOT);
         List<Godown> matches = godowns.findByBusinessIdOrderByCodeAsc(businessId).stream()
-                .filter(godown -> godown.getCode().equalsIgnoreCase(wanted) || godown.getName().equalsIgnoreCase(code))
+                .filter(godown -> godown.getCode().equalsIgnoreCase(wanted) || godown.getName().equalsIgnoreCase(code)
+                        || (godownNumber(code) != null && (godownNumber(code).equals(godownNumber(godown.getCode()))
+                        || godownNumber(code).equals(godownNumber(godown.getName())))))
                 .toList();
         return matches.size() == 1 ? matches.get(0).getId() : null;
+    }
+
+    private static String godownNumber(String value) {
+        if (value == null) return null;
+        var match = java.util.regex.Pattern.compile("(?iu)^(?:godown|godam|गोदाम|गोडाउन|गोडाम|g)\\s*(?:no\\.?|number|नंबर|नम्बर)?\\s*([0-9०-९]+)$").matcher(value.trim());
+        if (!match.matches()) return null;
+        StringBuilder digits = new StringBuilder();
+        match.group(1).codePoints().forEach(c -> digits.append(Character.digit(c, 10)));
+        return new java.math.BigInteger(digits.toString()).toString();
     }
 
     private static BigDecimal quantity(JsonNode node) {

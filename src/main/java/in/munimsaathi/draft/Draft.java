@@ -86,6 +86,25 @@ public class Draft {
     @Column
     private String direction;
 
+    @Column(name = "heard_party")
+    private String heardParty;
+
+    @Column(name = "heard_product")
+    private String heardProduct;
+
+    @Column(name = "heard_location")
+    private String heardLocation;
+
+    public void rememberHeard(String party, String product, String location) {
+        if (party != null) heardParty = party;
+        if (product != null) heardProduct = product;
+        if (location != null) heardLocation = location;
+    }
+
+    public String getHeardParty() { return heardParty; }
+    public String getHeardProduct() { return heardProduct; }
+    public String getHeardLocation() { return heardLocation; }
+
     protected Draft() {
     }
 

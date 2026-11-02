@@ -440,6 +440,32 @@ public class DraftBook {
         }
     }
 
+    @Transactional
+    public void rememberHeard(UUID userId, UUID draftId, String party, String product, String location) {
+        Draft draft = requireDraft(tenants.currentBusinessId(userId), draftId);
+        if (draft.getStatus() != DraftStatus.POSTED) draft.rememberHeard(party, product, location);
+    }
+
+    @Transactional(readOnly = true)
+    public String openContext(UUID userId) {
+        StringBuilder text = new StringBuilder();
+        for (OpenDraft open : open(userId)) {
+            Draft draft = requireDraft(tenants.currentBusinessId(userId), open.id());
+            text.append("\n").append(draft.getId()).append(" kind=").append(draft.getKind())
+                    .append(" party_id=").append(draft.getCustomerId()).append(" heard_party=").append(draft.getHeardParty())
+                    .append(" product_id=").append(draft.getProductId()).append(" heard_product=").append(draft.getHeardProduct())
+                    .append(" location_id=").append(draft.getLocationId()).append(" heard_location=").append(draft.getHeardLocation())
+                    .append(" quantity=").append(draft.getDisplayQuantity()).append(" unit=").append(draft.getUnitLabel())
+                    .append(" amount_paise=").append(draft.getAmountPaise()).append(" missing=").append(draft.getMissingFields());
+            for (DraftLine line : draftLines.findByDraftIdOrderByLineNumberAsc(draft.getId())) {
+                text.append("\n line=").append(line.getLineNumber()).append(" product_id=").append(line.getProductId())
+                        .append(" quantity=").append(line.getDisplayQuantity()).append(" unit=").append(line.getUnitLabel())
+                        .append(" unresolved=").append(line.getUnresolved());
+            }
+        }
+        return text.toString();
+    }
+
     public record OpenDraft(UUID id, String kind, String missing, long version, Long amountPaise, UUID partyId) {
     }
 

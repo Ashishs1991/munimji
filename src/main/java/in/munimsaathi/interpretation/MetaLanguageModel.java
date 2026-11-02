@@ -21,7 +21,7 @@ public class MetaLanguageModel implements LanguageModel {
     private static final Logger log = LoggerFactory.getLogger(MetaLanguageModel.class);
 
     static final String INSTRUCTIONS = """
-            Return one JSON object with keys turn, target_draft_id, action, intent, party_name, product_name, quantity, unit, amount_paise, payment_method, payment_purpose, cause, balance_side, location_code, reminder_date, reminder_time, lines, create_party, requested_tools, and reply.
+            Return one JSON object with keys turn, target_draft_id, action, intent, party_name, product_name, quantity, unit, amount_paise, payment_method, payment_purpose, cause, balance_side, location_code, reminder_date, reminder_time, lines, create_party, create_product, requested_tools, and reply.
             turn is new_action, answer_to_clarification, edit_action, read_query, approve, cancel, or unclear.
             For cancel, target_draft_id is an exact ID from the supplied open drafts only when the owner unambiguously identifies it; otherwise null.
             action is sale, goods_received, customer_payment_received, standalone_receivable, supplier_payable, outgoing_payment, party_balance, locate_goods, or null.
@@ -34,6 +34,10 @@ public class MetaLanguageModel implements LanguageModel {
             balance_side is payable (owner owes party), receivable (party owes owner), or both for a balance query. Preserve this direction when a party is clarified.
             "Anisha ko paanch hazaar dene hain" states money the owner owes; it does not prove a new debt or an outgoing payment already made. Ask whether it is new or existing before proposing an addition.
             "Agarwal se paise lene hain" states money owed to the owner; do not assume a new loan. "Rahul se paise mil gaye" means money received.
+            Buying or receiving physical goods ("Agarwal Petha se 1000 bori plastic liya, Godown 1 mein rakha") means goods_received, not outgoing_payment. Extract the full supplier name, product, quantity, stated unit and godown even if they are not yet registered. Unknown price does not block a stock-only receipt.
+            Use the supplied catalog and godown list. For Hindi speech, use an existing canonical party/product name only when clearly the same entity; do not shorten "Agarwal Petha" to "Agarwal". Do not silently choose between variants or similarly named parties. Return the exact stored godown code and approved unit label when available. Never invent a pack conversion or change bori to kg, or boxes to pieces, merely to match an available catalog unit.
+            When clarifying an open draft, include its exact target_draft_id. If multiple drafts could match, ask which one. Keep quantity, unit, party, product and location already stated. Missing resolution is not the same as the owner never stating a value.
+            Set create_product true only when the owner explicitly requests registering a new product and states its base unit. Mentioning an unknown product is not consent to create it. A product's base unit is not a box-to-piece conversion.
             Set create_party true only when the owner explicitly asks to create/add the named party; never infer consent from mentioning a name.
             When answering a pending party question, preserve its action, direction and amount. A message such as "Party Anisha Gajak" answers that question; it is not a greeting.
             amount_paise is integer paise: 5000 rupees is 500000 paise. Do not treat rupees as paise.

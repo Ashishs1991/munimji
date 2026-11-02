@@ -103,6 +103,93 @@ class DemoRecoveryTest {
     private VoiceReceipts voices;
 
     @Test
+    void productCreationDoesNotRunInsideAMoneyCommand() {
+        Shop sh = shop();
+        when(model.complete("money with product flag")).thenReturn("""
+                {"turn":"new_action","action":"outgoing_payment","party_name":"Agarwal","amount_paise":100000,"payment_method":"Cash","payment_purpose":"loan","product_name":"Unexpected stock","unit":"bori","create_product":true}
+                """);
+        var result = interpreter.interpret(sh.userId(), "money with product flag", DAY, AT);
+        assertThat(result.draft()).isNull();
+        assertThat(catalog.candidates(sh.userId(), "Unexpected stock")).isEmpty();
+        assertThat(drafts.open(sh.userId())).isEmpty();
+    }
+
+    @Test
+    void ambiguousPurchaseFollowUpDoesNotCreateAThirdDraftOrParty() {
+        Shop sh = shop();
+        var one = drafts.propose(sh.userId(), "receive", null, null, sh.godownId(), BigDecimal.ONE, "bori", null, DAY, AT);
+        var two = drafts.propose(sh.userId(), "receive", null, null, sh.godownId(), BigDecimal.TEN, "bori", null, DAY, AT);
+        when(model.complete("supplier create")).thenReturn("""
+                {"turn":"answer_to_clarification","party_name":"Agarwal Petha","create_party":true}
+                """);
+        var answer = interpreter.interpret(sh.userId(), "supplier create", DAY, AT);
+        assertThat(answer.draft()).isNull();
+        assertThat(answer.answer()).contains(one.id().toString(), two.id().toString());
+        assertThat(drafts.open(sh.userId())).hasSize(2);
+        assertThat(parties.findByName(sh.userId(), "Agarwal Petha")).isEmpty();
+    }
+
+    @Test
+    void foreignDraftTargetCannotCreateCatalogRecords() {
+        Shop sh = shop();
+        Shop other = shop();
+        var foreign = drafts.propose(other.userId(), "receive", null, null, other.godownId(), BigDecimal.ONE, "bori", null, DAY, AT);
+        when(model.complete("foreign target")).thenReturn("""
+                {"turn":"answer_to_clarification","target_draft_id":"%s","party_name":"Unsafe supplier","create_party":true,"product_name":"Unsafe product","unit":"bori","create_product":true}
+                """.formatted(foreign.id()));
+        assertThatThrownBy(() -> interpreter.interpret(sh.userId(), "foreign target", DAY, AT)).isInstanceOf(IllegalArgumentException.class);
+        assertThat(parties.findByName(sh.userId(), "Unsafe supplier")).isEmpty();
+        assertThat(catalog.candidates(sh.userId(), "Unsafe product")).isEmpty();
+    }
+
+    @Test
+    void purchaseKeepsQuantityAndGodownAcrossExplicitPartyAndProductCreation() {
+        Shop sh = shop();
+        String instruction = "Agarwal Petha se 1000 bori plastic liya Godown 1 mein hai";
+        when(model.complete(instruction)).thenReturn("""
+                {"turn":"new_action","action":"goods_received","party_name":"अगरवाल पेठा","product_name":"प्लास्टिक","quantity":"1000","unit":"बोरी","location_code":"गोदाम १"}
+                """);
+        var receipt = interpreter.interpret(sh.userId(), instruction, DAY, AT);
+        Draft row = draftRows.findById(receipt.draft().id()).orElseThrow();
+        assertThat(row.getLocationId()).isEqualTo(sh.godownId());
+        assertThat(row.getDisplayQuantity()).isEqualByComparingTo("1000");
+        assertThat(row.getMissingFields()).doesNotContain("location");
+        when(model.complete("supplier banao")).thenReturn("""
+                {"turn":"answer_to_clarification","target_draft_id":"%s","party_name":"अगरवाल पेठा","create_party":true}
+                """.formatted(receipt.draft().id()));
+        var partyAnswer = interpreter.interpret(sh.userId(), "supplier banao", DAY, AT);
+        assertThat(partyAnswer.draft().id()).isEqualTo(receipt.draft().id());
+        assertThat(parties.findByName(sh.userId(), "अगरवाल पेठा").get(0).getRole()).isEqualTo(PartyRole.SUPPLIER);
+        when(model.complete("plastic product banao bori mein")).thenReturn("""
+                {"turn":"answer_to_clarification","target_draft_id":"%s","product_name":"प्लास्टिक","unit":"बोरी","create_product":true}
+                """.formatted(receipt.draft().id()));
+        var productAnswer = interpreter.interpret(sh.userId(), "plastic product banao bori mein", DAY, AT);
+        assertThat(productAnswer.draft().id()).isEqualTo(receipt.draft().id());
+        assertThat(productAnswer.draft().status()).isEqualTo(DraftStatus.AWAITING_APPROVAL);
+        row = draftRows.findById(receipt.draft().id()).orElseThrow();
+        assertThat(row.getDisplayQuantity()).isEqualByComparingTo("1000");
+        assertThat(row.getLocationId()).isEqualTo(sh.godownId());
+        assertThat(counts.balance(sh.userId(), row.getProductId(), sh.godownId())).isEqualByComparingTo("0");
+        drafts.approve(sh.userId(), row.getId(), productAnswer.draft().version(), productAnswer.draft().contentHash());
+        assertThat(counts.balance(sh.userId(), row.getProductId(), sh.godownId())).isEqualByComparingTo("1000");
+        assertThat(posting.supplierPayablePaise(sh.userId(), row.getCustomerId())).isZero();
+    }
+
+    @Test
+    void modelContextIncludesCatalogLocationsAndUnresolvedPurchaseDetails() {
+        Shop sh = shop();
+        when(model.complete("unresolved purchase")).thenReturn("""
+                {"turn":"new_action","action":"goods_received","party_name":"अगरवाल पेठा","product_name":"प्लास्टिक","quantity":"1000","unit":"बोरी","location_code":"Godown 1"}
+                """);
+        var result = interpreter.interpret(sh.userId(), "unresolved purchase", DAY, AT);
+        when(model.complete("context probe")).thenAnswer(call -> {
+            assertThat(TurnContext.current()).contains("Office folder", "Godown 1", "g1", "अगरवाल पेठा", "प्लास्टिक", "1000", "बोरी", result.draft().id().toString());
+            return "{\"turn\":\"unclear\",\"reply\":\"Party ka naam confirm karein\"}";
+        });
+        interpreter.interpret(sh.userId(), "context probe", DAY, AT);
+    }
+
+    @Test
     void aPendingTwoThousandSaleStaysUntouchedWhenAPaymentArrives() {
         Shop shop = shop();
         parties.create(shop.userId(), "Rahul", PartyRole.CUSTOMER);

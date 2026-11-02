@@ -122,6 +122,30 @@ class WhatsAppTurnTest {
     private OwnerDashboard dashboard;
 
     @Test
+    void unknownSupplierQuestionKeepsTheVoicePurchaseFactsAndAsksOneThing() {
+        String phone = "919800005557";
+        Shelf sh = shelf(phone);
+        when(transcriber.transcribe(any(), anyString())).thenReturn("Agarwal Petha se 1000 bori plastic aaya Godown 1 mein");
+        when(model.complete("Agarwal Petha se 1000 bori plastic aaya Godown 1 mein")).thenReturn("""
+                {"turn":"new_action","action":"goods_received","party_name":"अगरवाल पेठा","product_name":"प्लास्टिक","quantity":"1000","unit":"बोरी","location_code":"गोदाम १"}
+                """);
+        byte[] body = ("{\"entry\":[{\"changes\":[{\"value\":{\"messages\":[{\"id\":\"purchase-voice-clarify\",\"from\":\"" + phone
+                + "\",\"audio\":{\"id\":\"purchase-voice-media\",\"mime_type\":\"audio/ogg\"}}]}}]}]}").getBytes(StandardCharsets.UTF_8);
+        when(session.download("purchase-voice-media")).thenReturn(new byte[]{1, 2, 3});
+        when(session.sendText(eq(phone), anyString())).thenReturn(new ProviderReceipt("accepted", "purchase-question"));
+        ingress.receive(sign(body), body);
+        turn.openStored();
+        var text = org.mockito.ArgumentCaptor.forClass(String.class);
+        verify(session).sendText(eq(phone), text.capture());
+        assertThat(text.getValue()).contains("1000 बोरी", "Godown 1", "अगरवाल पेठा", "Supplier").doesNotContain("Kaunsa product", "Kis godown");
+        Draft stored = draftRows.findById(messages.findByMessageId("purchase-voice-clarify").orElseThrow().getDraftId()).orElseThrow();
+        assertThat(stored.getHeardProduct()).isEqualTo("प्लास्टिक");
+        assertThat(stored.getHeardParty()).isEqualTo("अगरवाल पेठा");
+        assertThat(stored.getLocationId()).isEqualTo(sh.godownId());
+        assertThat(stored.getStatus()).isEqualTo(DraftStatus.NEEDS_CLARIFICATION);
+    }
+
+    @Test
     void aStoredMessageBecomesOneReplyAndASecondPassDoesNotCallTheModelAgain() {
         UUID userId = owner();
         ingress.allow(userId, PHONE);

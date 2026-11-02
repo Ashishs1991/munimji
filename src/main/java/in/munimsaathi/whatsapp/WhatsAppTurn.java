@@ -383,6 +383,10 @@ public class WhatsAppTurn {
     private String reply(InterpretationOutcome outcome) {
         if (outcome.draft() != null) {
             Draft pending = draftRows.findById(outcome.draft().id()).orElse(null);
+            if (pending != null && "RECEIPT".equals(pending.getKind()) && pending.getStatus() == DraftStatus.NEEDS_CLARIFICATION
+                    && draftLines.findByDraftIdOrderByLineNumberAsc(pending.getId()).isEmpty()) {
+                return receiptQuestion(pending);
+            }
             if (pending != null && "OUTGOING_PAYMENT".equals(pending.getKind()) && pending.getStatus() == DraftStatus.NEEDS_CLARIFICATION) {
                 return outgoingQuestion(pending, outcome.answer());
             }
@@ -402,6 +406,28 @@ public class WhatsAppTurn {
             text = text + " E-way draft " + outcome.ewayDraftId() + " is saved and not submitted.";
         }
         return text;
+    }
+
+    private String receiptQuestion(Draft draft) {
+        StringBuilder facts = new StringBuilder("Maal aane ki draft entry: ");
+        if (draft.getDisplayQuantity() != null) facts.append(draft.getDisplayQuantity().stripTrailingZeros().toPlainString()).append(" ");
+        if (draft.getUnitLabel() != null) facts.append(draft.getUnitLabel()).append(" ");
+        if (draft.getHeardProduct() != null) facts.append(draft.getHeardProduct()).append(" ");
+        if (draft.getLocationId() != null) {
+            godowns.findById(draft.getLocationId()).ifPresent(place -> facts.append("— ").append(place.getName()));
+        }
+        facts.append(". ");
+        if (draft.getCustomerId() == null) {
+            return facts + "Supplier ka poora saved naam bataiye" + (draft.getHeardParty() == null ? "." : "; aapne “" + draft.getHeardParty() + "” kaha tha.")
+                    + " Nayi party hai to us naam ki supplier party banane ko kahiye.";
+        }
+        if (draft.getProductId() == null) {
+            return facts + "Kaunsa product hai? Saved product ka poora naam bataiye. Naya hai to uska naam aur base unit batakar product banane ko kahiye.";
+        }
+        if (draft.getLocationId() == null) return facts + "Kis godown mein rakha hai?";
+        if (draft.getDisplayQuantity() == null) return facts + "Kitna maal aaya?";
+        if (draft.getUnitLabel() == null) return facts + "Quantity ki unit kya hai—bori, kg ya pieces?";
+        return facts + "Kaunsi detail badalni hai? Entry abhi post nahi hui hai.";
     }
 
     private String outgoingQuestion(Draft draft, String note) {

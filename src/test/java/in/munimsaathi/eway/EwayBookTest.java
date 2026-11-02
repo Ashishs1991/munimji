@@ -170,7 +170,8 @@ class EwayBookTest {
                 .andReturn()
                 .getResponse()
                 .getContentAsString();
-        assertThat(body).contains("CONFIRMED").contains("sandbox").doesNotContain("999");
+        assertThat(body).contains("CONFIRMED").contains("sandbox");
+        assertThat(mapper.readTree(body).get("ewayBillNo").asText()).isEqualTo("123456789");
     }
 
     @Test

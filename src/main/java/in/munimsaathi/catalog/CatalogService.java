@@ -158,6 +158,22 @@ public class CatalogService {
         return products.search(businessId, term.trim()).stream().limit(CANDIDATE_LIMIT).toList();
     }
 
+    @Transactional(readOnly = true)
+    public String interpretationContext(UUID userId) {
+        StringBuilder text = new StringBuilder();
+        // shortcut: small-shop context is capped at 100 products; add retrieval for larger catalogs.
+        for (Product product : products.findByBusinessId(tenants.currentBusinessId(userId)).stream()
+                .filter(Product::isActive).sorted(java.util.Comparator.comparing(Product::getSku)).limit(100).toList()) {
+            text.append("\nname=").append(product.getName()).append(" sku=").append(product.getSku())
+                    .append(" brand=").append(product.getBrand()).append(" variant=").append(product.getVariant())
+                    .append(" base_unit=").append(product.getBaseUnit()).append(" approved_units=");
+            for (ProductUnit unit : units.findByProductId(product.getId())) {
+                text.append(unit.getUnitLabel()).append(" ");
+            }
+        }
+        return text.toString();
+    }
+
     private Product requireProduct(UUID businessId, UUID productId) {
         Product product = products.findById(productId).orElseThrow(() -> new IllegalArgumentException("Unknown product."));
         if (!product.getBusinessId().equals(businessId)) {
