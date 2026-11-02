@@ -154,6 +154,119 @@ class WhatsAppTurnTest {
     }
 
     @Test
+    void yesApprovesTheShownEntryEvenWithOlderPendingWorkAndDoesNotRepeatPost() {
+        String phone = "919800005551";
+        Shelf sh = shelf(phone);
+        LocalDate day = LocalDate.now();
+        Instant at = Instant.now();
+        var older = drafts.propose(sh.userId(), "sale", sh.customerId(), sh.productId(), sh.godownId(), BigDecimal.ONE, "box", 100_000L, day, at);
+        var current = drafts.propose(sh.userId(), "sale", sh.customerId(), sh.productId(), sh.godownId(), BigDecimal.ONE, "box", 200_000L, day, at);
+        when(session.sendText(eq(phone), anyString())).thenReturn(new ProviderReceipt("accepted", "choices-reply"));
+        byte[] ambiguous = message("old-proposals-yes", phone, "Yes");
+        ingress.receive(sign(ambiguous), ambiguous);
+        turn.openStored();
+        verify(session).sendText(eq(phone), org.mockito.ArgumentMatchers.contains("entry " + current.id()));
+        byte[] show = message("shown-entry", phone, "entry " + current.id());
+        ingress.receive(sign(show), show);
+        when(session.sendText(eq(phone), anyString())).thenReturn(new ProviderReceipt("accepted", "shown-reply"));
+        turn.openStored();
+
+        for (String id : new String[]{"shown-yes-1", "shown-yes-2"}) {
+            byte[] yes = message(id, phone, "Yes");
+            ingress.receive(sign(yes), yes);
+            turn.openStored();
+        }
+
+        assertThat(draftRows.findById(current.id()).orElseThrow().getStatus()).isEqualTo(DraftStatus.POSTED);
+        assertThat(draftRows.findById(older.id()).orElseThrow().getStatus()).isEqualTo(DraftStatus.AWAITING_APPROVAL);
+        assertThat(counts.balance(sh.userId(), sh.productId(), sh.godownId())).isEqualByComparingTo("40");
+        verify(model, never()).complete(anyString());
+    }
+
+    @Test
+    void shownProposalCannotApproveAnEditThatWasNotShown() {
+        String phone = "919800005552";
+        Shelf sh = shelf(phone);
+        LocalDate day = LocalDate.now();
+        Instant at = Instant.now();
+        var proposal = drafts.propose(sh.userId(), "sale", sh.customerId(), sh.productId(), sh.godownId(), BigDecimal.ONE, "box", 100_000L, day, at);
+        byte[] show = message("shown-before-edit", phone, "show entry");
+        ingress.receive(sign(show), show);
+        InboundMessage presentation = messages.findByMessageId("shown-before-edit").orElseThrow();
+        presentation.attachDraft(proposal.id());
+        messages.saveAndFlush(presentation);
+        when(session.sendText(eq(phone), anyString())).thenReturn(new ProviderReceipt("accepted", "shown-reply"));
+        turn.openStored();
+        drafts.edit(sh.userId(), proposal.id(), "sale", sh.customerId(), sh.productId(), sh.godownId(), new BigDecimal("2"), "box", 100_000L, day, at);
+        byte[] yes = message("shown-stale-yes", phone, "Yes");
+        ingress.receive(sign(yes), yes);
+        turn.openStored();
+        assertThat(counts.balance(sh.userId(), sh.productId(), sh.godownId())).isEqualByComparingTo("50");
+        verify(session).sendText(eq(phone), org.mockito.ArgumentMatchers.contains("This approval is no longer current."));
+    }
+
+    @Test
+    void shownProposalLookupIsScopedToBusinessActorAndPhone() {
+        String phone = "919800005553";
+        Shelf sh = shelf(phone);
+        var proposal = drafts.propose(sh.userId(), "sale", sh.customerId(), sh.productId(), sh.godownId(), BigDecimal.ONE, "box", 100_000L, LocalDate.now(), Instant.now());
+        InboundMessage shown = new InboundMessage(UUID.randomUUID(), sh.businessId(), sh.userId(), "scoped-presentation", phone, "show", InboundStatus.STORED);
+        shown.attachDraft(proposal.id());
+        shown.rememberShownProposal(proposal.version(), proposal.contentHash());
+        messages.saveAndFlush(shown);
+        assertThat(messages.latestShownProposal(sh.businessId(), sh.userId(), phone)).isEmpty();
+        shown.markReplied();
+        messages.saveAndFlush(shown);
+        assertThat(messages.latestShownProposal(sh.businessId(), sh.userId(), phone)).isPresent();
+        assertThat(messages.latestShownProposal(UUID.randomUUID(), sh.userId(), phone)).isEmpty();
+        assertThat(messages.latestShownProposal(sh.businessId(), UUID.randomUUID(), phone)).isEmpty();
+        assertThat(messages.latestShownProposal(sh.businessId(), sh.userId(), "919800005554")).isEmpty();
+    }
+
+    @Test
+    void outgoingLoanCanBeConfirmedWhileAnOlderSaleIsPending() {
+        String phone = "919800005555";
+        Shelf sh = shelf(phone);
+        var old = drafts.propose(sh.userId(), "sale", sh.customerId(), sh.productId(), sh.godownId(), BigDecimal.ONE, "box", 100_000L, LocalDate.now(), Instant.now());
+        String instruction = "Agarwal ko das hazaar cash udhaar diye";
+        when(model.complete(instruction)).thenReturn("""
+                {"turn":"new_action","action":"outgoing_payment","party_name":"Agarwal","amount_paise":1000000,"payment_purpose":"loan","payment_method":"Cash"}
+                """);
+        when(session.sendText(eq(phone), anyString())).thenReturn(new ProviderReceipt("accepted", "loan-shown"));
+        byte[] body = message("loan-to-confirm", phone, instruction);
+        ingress.receive(sign(body), body);
+        turn.openStored();
+        UUID loanId = messages.findByMessageId("loan-to-confirm").orElseThrow().getDraftId();
+        assertThat(loanId).isNotNull().isNotEqualTo(old.id());
+        byte[] yes = message("loan-confirm-yes", phone, "Yes");
+        ingress.receive(sign(yes), yes);
+        turn.openStored();
+        assertThat(draftRows.findById(loanId).orElseThrow().getStatus()).isEqualTo(DraftStatus.POSTED);
+        assertThat(draftRows.findById(old.id()).orElseThrow().getStatus()).isEqualTo(DraftStatus.AWAITING_APPROVAL);
+        assertThat(counts.balance(sh.userId(), sh.productId(), sh.godownId())).isEqualByComparingTo("50");
+    }
+
+    @Test
+    void latestShownProposalUsesSuccessfulSendOrderWhenAnOlderReplyRetries() {
+        String phone = "919800005556";
+        Shelf sh = shelf(phone);
+        var proposal = drafts.propose(sh.userId(), "sale", sh.customerId(), sh.productId(), sh.godownId(), BigDecimal.ONE, "box", 100_000L, LocalDate.now(), Instant.now());
+        InboundMessage first = new InboundMessage(UUID.randomUUID(), sh.businessId(), sh.userId(), "first-delivery", phone, "first", InboundStatus.STORED);
+        first.attachDraft(proposal.id());
+        first.rememberShownProposal(proposal.version(), proposal.contentHash());
+        messages.saveAndFlush(first);
+        InboundMessage second = new InboundMessage(UUID.randomUUID(), sh.businessId(), sh.userId(), "second-delivery", phone, "second", InboundStatus.STORED);
+        second.attachDraft(proposal.id());
+        second.rememberShownProposal(proposal.version(), proposal.contentHash());
+        second.recordAttempt("accepted");
+        messages.saveAndFlush(second);
+        assertThat(messages.latestShownProposal(sh.businessId(), sh.userId(), phone).orElseThrow().getId()).isEqualTo(second.getId());
+        first.recordAttempt("accepted");
+        messages.saveAndFlush(first);
+        assertThat(messages.latestShownProposal(sh.businessId(), sh.userId(), phone).orElseThrow().getId()).isEqualTo(first.getId());
+    }
+
+    @Test
     void aBlockedReceiptLeavesTheMessageUnreplied() {
         UUID userId = owner();
         String phone = "919800000113";

@@ -8,6 +8,7 @@ import jakarta.persistence.Id;
 import jakarta.persistence.Table;
 
 import java.util.UUID;
+import java.time.Instant;
 
 @Entity
 @Table(name = "inbound_messages")
@@ -61,6 +62,17 @@ public class InboundMessage {
 
     @Column(name = "content_hash")
     private String contentHash;
+
+    @Column(name = "proposal_shown_at")
+    private Instant proposalShownAt;
+
+    public void rememberShownProposal(long version, String hash) {
+        if (proposalShownAt == null) {
+            proposalShownAt = Instant.now();
+            draftVersion = version;
+            contentHash = hash;
+        }
+    }
 
     protected InboundMessage() {
     }
@@ -116,6 +128,9 @@ public class InboundMessage {
         this.replyStatus = replyStatus;
         if ("accepted".equals(replyStatus)) {
             this.status = InboundStatus.REPLIED;
+            if (proposalShownAt != null && !approvalBound) {
+                proposalShownAt = Instant.now();
+            }
         }
     }
 

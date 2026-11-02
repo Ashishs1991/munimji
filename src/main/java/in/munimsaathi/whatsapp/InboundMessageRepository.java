@@ -37,5 +37,15 @@ public interface InboundMessageRepository extends JpaRepository<InboundMessage, 
 
     List<InboundMessage> findByStatus(InboundStatus status);
 
+    @Query(value = """
+            select * from inbound_messages
+            where business_id = :businessId and user_id = :userId and phone = :phone
+              and proposal_shown_at is not null and status = 'REPLIED' and approval_bound = false
+            order by proposal_shown_at desc limit 1
+            """, nativeQuery = true)
+    Optional<InboundMessage> latestShownProposal(@Param("businessId") UUID businessId,
+                                                @Param("userId") UUID userId,
+                                                @Param("phone") String phone);
+
     long countByMessageId(String messageId);
 }

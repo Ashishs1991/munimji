@@ -121,7 +121,11 @@ public class WhatsAppTurn {
             Prepared prepared;
             try {
                 transactions.executeWithoutResult(status -> bindApproval(id));
-                prepared = transactions.execute(status -> prepare(id));
+                prepared = transactions.execute(status -> {
+                    Prepared reply = prepare(id);
+                    rememberShownProposal(id, reply);
+                    return reply;
+                });
             } catch (RuntimeException exception) {
                 String phone = messages.findById(id).map(InboundMessage::getPhone).orElse(null);
                 String text = exception.getMessage() == null ? "That message could not be read." : exception.getMessage();
@@ -144,6 +148,20 @@ public class WhatsAppTurn {
         }
     }
 
+    private void rememberShownProposal(UUID id, Prepared reply) {
+        if (reply == null || reply.text() == null || !reply.text().contains("Is entry ko confirm karne ke liye")) {
+            return;
+        }
+        InboundMessage message = messages.findById(id).orElseThrow();
+        if (message.isApprovalBound() || message.getDraftId() == null) {
+            return;
+        }
+        Draft draft = draftRows.findById(message.getDraftId()).orElseThrow();
+        if (draft.getStatus() == DraftStatus.AWAITING_APPROVAL) {
+            message.rememberShownProposal(draft.getPresentedVersion(), draft.getPresentedHash());
+        }
+    }
+
     private void bindApproval(UUID id) {
         InboundMessage message = messages.findById(id).orElse(null);
         if (message == null || message.getStatus() != InboundStatus.STORED || message.getUserId() == null || message.isApprovalBound()) {
@@ -153,10 +171,16 @@ public class WhatsAppTurn {
             return;
         }
         tenants.inBusiness(message.getUserId(), message.getBusinessId(), () -> {
+            var shown = messages.latestShownProposal(message.getBusinessId(), message.getUserId(), message.getPhone());
+            if (shown.isPresent()) {
+                InboundMessage proposal = shown.get();
+                message.bindApproval(proposal.getDraftId(), proposal.getDraftVersion(), proposal.getContentHash());
+                return null;
+            }
             List<Draft> pending = draftRows.findByBusinessIdAndStatus(
                     message.getBusinessId(),
                     DraftStatus.AWAITING_APPROVAL
-            );
+            ).stream().filter(draft -> !draft.getExpiresAt().isBefore(Instant.now())).toList();
             List<ReminderTask> waiting = reminderTasks.findByBusinessIdAndStatusIn(
                     message.getBusinessId(),
                     List.of(ReminderStatus.AWAITING_APPROVAL, ReminderStatus.NEEDS_REAPPROVAL)
@@ -202,6 +226,16 @@ public class WhatsAppTurn {
             return new Prepared(message.getPhone(), "Send the instruction as text.");
         }
         String word = message.getBody().trim().toLowerCase(Locale.ROOT);
+        if (word.startsWith("entry ")) {
+            String selected = word.substring(6).trim();
+            Draft chosen = openDrafts(message.getUserId()).stream()
+                    .filter(draft -> draft.getId().toString().equals(selected)).findFirst().orElse(null);
+            if (chosen == null) {
+                return new Prepared(message.getPhone(), "Yeh entry abhi pending nahi hai. Sahi entry ID bhejiye.");
+            }
+            message.attachDraft(chosen.getId());
+            return new Prepared(message.getPhone(), details(message.getUserId(), chosen.getId()));
+        }
         if (CANCEL.contains(word)) {
             return remembered(message, cancelOpen(message));
         }
@@ -223,6 +257,15 @@ public class WhatsAppTurn {
             return new Prepared(message.getPhone(), "Reminder approved. It stays on the dashboard and is not sent to the customer.");
         }
         if (message.getDraftId() == null || message.getDraftVersion() == null || message.getContentHash() == null) {
+            List<Draft> pending = openDrafts(message.getUserId()).stream()
+                    .filter(draft -> draft.getStatus() == DraftStatus.AWAITING_APPROVAL).toList();
+            if (!pending.isEmpty()) {
+                StringBuilder choices = new StringBuilder("Kaunsi entry confirm karni hai? Neeche se entry ID chuniye; pehle uska poora draft dikhaunga.\n");
+                for (Draft draft : pending) {
+                    choices.append("entry ").append(draft.getId()).append(" — ").append(facts(draft)).append("\n");
+                }
+                return new Prepared(message.getPhone(), choices.toString().trim());
+            }
             return new Prepared(message.getPhone(), "Yes approves only one current proposal.");
         }
         Draft stored = draftRows.findById(message.getDraftId()).orElse(null);
