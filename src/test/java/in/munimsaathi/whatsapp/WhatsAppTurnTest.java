@@ -437,4 +437,15 @@ class WhatsAppTurnTest {
         }
     }
 
+    @Autowired private in.munimsaathi.interpretation.PendingBalanceQuestions reviewQuestions;
+    @Test void bareCancelClearsThePendingBalanceQuestion() {
+        String phone="919800006666"; Shelf sh=shelf(phone);
+        reviewQuestions.save(sh.userId(),"Anisha","payable",500000L);
+        byte[] body=message("cancel-balance-question",phone,"cancel"); ingress.receive(sign(body),body);
+        when(session.sendText(eq(phone),anyString())).thenReturn(new ProviderReceipt("accepted","canceled-question"));
+        turn.openStored();
+        assertThat(reviewQuestions.get(sh.userId())).isEmpty();
+        verify(session).sendText(eq(phone),org.mockito.ArgumentMatchers.contains("Cancelled the balance question"));
+    }
+
 }

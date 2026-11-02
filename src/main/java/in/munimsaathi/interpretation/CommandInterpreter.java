@@ -64,6 +64,7 @@ public class CommandInterpreter {
     private final LocationBook locations;
     private final ReminderBook reminders;
     private final ConversationMemory memory;
+    private final PendingBalanceQuestions questions;
 
     public CommandInterpreter(
             LanguageModel model,
@@ -77,7 +78,8 @@ public class CommandInterpreter {
             PostingService posting,
             LocationBook locations,
             ReminderBook reminders,
-            ConversationMemory memory
+            ConversationMemory memory,
+            PendingBalanceQuestions questions
     ) {
         this.model = model;
         this.mapper = mapper;
@@ -91,6 +93,7 @@ public class CommandInterpreter {
         this.locations = locations;
         this.reminders = reminders;
         this.memory = memory;
+        this.questions = questions;
     }
 
     @Transactional
@@ -142,7 +145,28 @@ public class CommandInterpreter {
         List<String> refused = refusedTools(reply);
         String turn = text(reply, "turn");
         if ("cancel".equals(turn)) {
+            boolean pendingQuestion = questions.get(userId).isPresent();
+            questions.clear(userId);
+            if (pendingQuestion && draftId == null && text(reply, "target_draft_id") == null) {
+                return new InterpretationOutcome(null, refused, null, "Cancelled the balance question. Nothing was posted.");
+            }
             return new InterpretationOutcome(null, refused, null, cancelDraft(userId, draftId, text(reply, "target_draft_id")));
+        }
+        var pendingPurpose = questions.get(userId).orElse(null);
+        String causeAnswer = text(reply, "cause");
+        String proposedAction = firstText(reply, "action", "intent");
+        boolean purposeReply = "answer_to_clarification".equals(turn) && pendingPurpose != null
+                && !"both".equals(pendingPurpose.side()) && pendingPurpose.partyName() != null && pendingPurpose.amountPaise() != null
+                && ("new".equals(causeAnswer) || "existing".equals(causeAnswer))
+                && (proposedAction == null || "supplier_payable".equals(proposedAction) || "standalone_receivable".equals(proposedAction));
+        if (purposeReply) {
+            var continued = reply.deepCopy();
+            var fields = (com.fasterxml.jackson.databind.node.ObjectNode) continued;
+            fields.put("action", "payable".equals(pendingPurpose.side()) ? "supplier_payable" : "standalone_receivable");
+            if (text(reply, "party_name") == null) fields.put("party_name", pendingPurpose.partyName());
+            if (amount(reply.get("amount_paise")) == null) fields.put("amount_paise", pendingPurpose.amountPaise());
+            reply = fields;
+            questions.clear(userId);
         }
         UUID ewayDraftId = ewayDraft(userId, reply);
         String intent = firstText(reply, "action", "intent");
@@ -155,7 +179,38 @@ public class CommandInterpreter {
             case "supplier_payable", "payable" -> "payable";
             default -> null;
         };
+        boolean balanceQuery = "party_balance".equals(normalized) || "balance".equals(normalized)
+                || "confirm_existing_debt".equals(normalized);
+        var pending = questions.get(userId).orElse(null);
+        boolean partyAnswer = pending != null && action == null && normalized.isBlank()
+                && (text(reply, "party_name") != null || text(reply, "balance_side") != null || Boolean.TRUE.equals(flag(reply, "create_party")))
+                && !"new_action".equals(turn);
+        if (balanceQuery || partyAnswer) {
+            String side = text(reply, "balance_side");
+            if (!"payable".equals(side) && !"receivable".equals(side) && !"both".equals(side)) {
+                side = pending == null ? "both" : pending.side();
+            }
+            String name = text(reply, "party_name");
+            if (name == null && pending != null && !"new_action".equals(turn)) {
+                name = pending.partyName();
+            }
+            Long statedAmount = amount(reply.get("amount_paise"));
+            if (statedAmount == null && pending != null && !"new_action".equals(turn)) {
+                statedAmount = pending.amountPaise();
+            }
+            return new InterpretationOutcome(null, refused, ewayDraftId,
+                    balanceAnswer(userId, name, side, statedAmount, Boolean.TRUE.equals(flag(reply, "create_party"))));
+        }
+        if (action != null && !"answer_to_clarification".equals(turn)) {
+            questions.clear(userId);
+        }
         boolean supplier = "receive".equals(action) || "payable".equals(action);
+        if (action == null && "answer_to_clarification".equals(turn)) {
+            var open = drafts.open(userId);
+            if (open.size() == 1) {
+                supplier = "RECEIPT".equals(open.get(0).kind()) || "PAYABLE".equals(open.get(0).kind());
+            }
+        }
         UUID customerId = party(userId, text(reply, "party_name"), supplier);
         if (customerId == null && text(reply, "party_name") == null && ("payment".equals(action) || "receivable".equals(action))) {
             List<Party> owing = parties.list(userId).stream()
@@ -195,15 +250,6 @@ public class CommandInterpreter {
         if ("locate".equals(normalized) || "locate_goods".equals(normalized)) {
             return new InterpretationOutcome(null, refused, ewayDraftId, answerFor(userId, "locate", customerId, productId, reply));
         }
-        if ("party_balance".equals(normalized) || "balance".equals(normalized) || "confirm_existing_debt".equals(normalized)) {
-            if ("confirm_existing_debt".equals(normalized) && customerId != null && amount != null
-                    && posting.customerReceivablePaise(userId, customerId) == amount) {
-                return new InterpretationOutcome(null, refused, ewayDraftId,
-                        "That amount is already recorded. I will not add it again.");
-            }
-            String balance = answerFor(userId, "balance", customerId, productId, reply);
-            return new InterpretationOutcome(null, refused, ewayDraftId, balance != null ? balance : spoken(reply));
-        }
         String answer = answerFor(userId, normalized, customerId, productId, reply);
         if (answer != null) {
             return new InterpretationOutcome(null, refused, ewayDraftId, answer);
@@ -214,15 +260,17 @@ public class CommandInterpreter {
         if (!stated) {
             return new InterpretationOutcome(null, refused, ewayDraftId, spoken(reply));
         }
-        if ("receivable".equals(action) && "existing".equalsIgnoreCase(text(reply, "cause")) && customerId != null && amount != null) {
-            long owed = posting.customerReceivablePaise(userId, customerId);
+        if (("receivable".equals(action) || "payable".equals(action))
+                && "existing".equalsIgnoreCase(text(reply, "cause")) && customerId != null && amount != null) {
+            long owed = "payable".equals(action) ? posting.supplierPayablePaise(userId, customerId)
+                    : posting.customerReceivablePaise(userId, customerId);
             if (owed == amount) {
                 return new InterpretationOutcome(null, refused, ewayDraftId, "That amount is already recorded. I will not add it again.");
             }
             return new InterpretationOutcome(null, refused, ewayDraftId, "That amount is not the balance I have. Say the new amount if it is new.");
         }
         if (Boolean.TRUE.equals(flag(reply, "create_party")) && customerId == null && text(reply, "party_name") != null) {
-            PartyRole role = "receive".equals(action) || "payable".equals(action) ? PartyRole.SUPPLIER : PartyRole.CUSTOMER;
+            PartyRole role = supplier ? PartyRole.SUPPLIER : PartyRole.CUSTOMER;
             customerId = parties.create(userId, text(reply, "party_name"), role).getId();
         }
         boolean locationOnly = action == null && locationId != null && quantity == null && unit == null
@@ -263,7 +311,9 @@ public class CommandInterpreter {
                 note = join(note, "Cash or UPI?");
             }
             if (draft.missingFields().contains("cause")) {
-                note = join(note, "Is this a new amount you gave, or an existing balance?");
+                note = join(note, "payable".equals(moneyAction)
+                        ? "Is this a new amount you owe, or an existing balance?"
+                        : "Is this a new amount you gave, or an existing balance?");
             }
             return new InterpretationOutcome(draft, refused, ewayDraftId, note);
         }
@@ -276,6 +326,61 @@ public class CommandInterpreter {
                 ewayDraftId,
                 clarification(userId, text(reply, "party_name"), customerId, supplier, text(reply, "product_name"), productId)
         );
+    }
+
+    private String balanceAnswer(UUID userId, String name, String side, Long statedAmount, boolean createRequested) {
+        if (name == null) {
+            questions.save(userId, null, side, statedAmount);
+            return "Which party is this for? I have kept your balance question.";
+        }
+        List<Party> matches = parties.findByName(userId, name);
+        if (matches.isEmpty() && createRequested && !"both".equals(side)) {
+            Party created = parties.create(userId, name, "payable".equals(side) ? PartyRole.SUPPLIER : PartyRole.CUSTOMER);
+            matches = List.of(created);
+        }
+        if (matches.size() != 1) {
+            questions.save(userId, name, side, statedAmount);
+            if (matches.isEmpty()) {
+                return "I could not find a saved party named " + name
+                        + ". Give the saved full name, or explicitly ask me to create this "
+                        + ("payable".equals(side) ? "supplier" : "receivable".equals(side) ? "customer" : "party with its customer/supplier role")
+                        + ". Your balance question is still open; no debt was posted.";
+            }
+            return "More than one party is named " + name + ". Which saved party do you mean?";
+        }
+        Party party = matches.get(0);
+        boolean customer = party.getRole() == PartyRole.CUSTOMER || party.getRole() == PartyRole.BOTH;
+        boolean supplier = party.getRole() == PartyRole.SUPPLIER || party.getRole() == PartyRole.BOTH;
+        if (("payable".equals(side) && !supplier) || ("receivable".equals(side) && !customer)) {
+            questions.save(userId, name, side, statedAmount);
+            return name + " is saved as a " + (supplier ? "supplier" : "customer")
+                    + ". Did you mean money you owe them (payable), or money they owe you (receivable)? Nothing was posted.";
+        }
+        if ("both".equals(side) && customer != supplier) {
+            side = supplier ? "payable" : "receivable";
+        }
+        questions.clear(userId);
+        StringBuilder answer = new StringBuilder(party.getDisplayName()).append(": ");
+        Long balance = null;
+        if (!"payable".equals(side) && customer) {
+            balance = posting.customerReceivablePaise(userId, party.getId());
+            answer.append("Receivable is ₹").append(BigDecimal.valueOf(balance, 2).toPlainString()).append(" (they owe you).");
+        }
+        if (!"receivable".equals(side) && supplier) {
+            long payable = posting.supplierPayablePaise(userId, party.getId());
+            if (balance != null) answer.append(' ');
+            answer.append("Payable is ₹").append(BigDecimal.valueOf(payable, 2).toPlainString()).append(" (you owe them).");
+            balance = balance == null ? payable : null;
+        }
+        if (statedAmount != null && balance != null) {
+            if (statedAmount.equals(balance)) answer.append(" That amount is already recorded; no new debt was added.");
+            else answer.append(" You mentioned ₹").append(BigDecimal.valueOf(statedAmount, 2).toPlainString())
+                    .append("; that differs from the recorded balance. Is this a new amount to record, or an existing balance? Nothing was added or changed.");
+            if (!statedAmount.equals(balance) && !"both".equals(side)) {
+                questions.save(userId, party.getDisplayName(), side, statedAmount);
+            }
+        }
+        return answer.toString();
     }
 
     private String cancelDraft(UUID userId, UUID draftId, String targetId) {
@@ -616,6 +721,10 @@ public class CommandInterpreter {
     private String context(UUID userId) {
         StringBuilder text = new StringBuilder();
         text.append("now=").append(LocalDate.now(ZoneId.of("Asia/Kolkata")));
+        questions.get(userId).ifPresent(question -> text.append("\npending balance question: party=")
+                .append(question.partyName()).append(" side=").append(question.side())
+                .append(" stated_amount_paise=").append(question.amountPaise())
+                .append(". A party-name answer continues this question; do not greet or ask for goods."));
         String history = memory.recent(userId);
         if (!history.isBlank()) {
             text.append("\nrecent:\n").append(history);
@@ -635,7 +744,7 @@ public class CommandInterpreter {
                 if (count == 20) {
                     break;
                 }
-                text.append(' ').append(party.getDisplayName());
+                text.append(' ').append(party.getDisplayName()).append(" [").append(party.getRole()).append("]");
                 count++;
             }
         }

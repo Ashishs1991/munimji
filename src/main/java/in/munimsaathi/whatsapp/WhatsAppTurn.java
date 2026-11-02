@@ -16,6 +16,7 @@ import in.munimsaathi.evidence.DocumentStore;
 import in.munimsaathi.interpretation.CommandInterpreter;
 import in.munimsaathi.interpretation.ConversationMemory;
 import in.munimsaathi.interpretation.InterpretationOutcome;
+import in.munimsaathi.interpretation.PendingBalanceQuestions;
 import in.munimsaathi.reminder.ProviderReceipt;
 import in.munimsaathi.reminder.ReminderBook;
 import in.munimsaathi.reminder.ReminderStatus;
@@ -64,6 +65,7 @@ public class WhatsAppTurn {
     private final SessionReply session;
     private final TransactionTemplate transactions;
     private final ConversationMemory memory;
+    private final PendingBalanceQuestions questions;
 
     public WhatsAppTurn(
             MunimProperties properties,
@@ -82,7 +84,8 @@ public class WhatsAppTurn {
             ReminderTaskRepository reminderTasks,
             SessionReply session,
             TransactionTemplate transactions,
-            ConversationMemory memory
+            ConversationMemory memory,
+            PendingBalanceQuestions questions
     ) {
         this.properties = properties;
         this.messages = messages;
@@ -101,6 +104,7 @@ public class WhatsAppTurn {
         this.session = session;
         this.transactions = transactions;
         this.memory = memory;
+        this.questions = questions;
     }
 
     @Scheduled(fixedDelay = 5_000)
@@ -295,6 +299,10 @@ public class WhatsAppTurn {
     }
 
     private String cancelOpen(InboundMessage message) {
+        if (questions.get(message.getUserId()).isPresent()) {
+            questions.clear(message.getUserId());
+            return "Cancelled the balance question. Nothing was posted.";
+        }
         List<Draft> open = openDrafts(message.getUserId());
         if (open.size() == 1) {
             drafts.cancel(message.getUserId(), open.get(0).getId());

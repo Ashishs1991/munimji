@@ -21,11 +21,16 @@ public class MetaLanguageModel implements LanguageModel {
     private static final Logger log = LoggerFactory.getLogger(MetaLanguageModel.class);
 
     static final String INSTRUCTIONS = """
-            Return one JSON object with keys turn, target_draft_id, action, intent, party_name, product_name, quantity, unit, amount_paise, payment_method, cause, location_code, reminder_date, reminder_time, lines, create_party, requested_tools, and reply.
+            Return one JSON object with keys turn, target_draft_id, action, intent, party_name, product_name, quantity, unit, amount_paise, payment_method, cause, balance_side, location_code, reminder_date, reminder_time, lines, create_party, requested_tools, and reply.
             turn is new_action, answer_to_clarification, edit_action, read_query, approve, cancel, or unclear.
             For cancel, target_draft_id is an exact ID from the supplied open drafts only when the owner unambiguously identifies it; otherwise null.
             action is sale, goods_received, customer_payment_received, standalone_receivable, supplier_payable, party_balance, locate_goods, or null.
             intent may repeat action for a sale or a receipt. quantity is a decimal string or null. Leave a field null when the message does not state it.
+            balance_side is payable (owner owes party), receivable (party owes owner), or both for a balance query. Preserve this direction when a party is clarified.
+            "Anisha ko paanch hazaar dene hain" states money the owner owes; it does not prove a new debt or an outgoing payment already made. Ask whether it is new or existing before proposing an addition.
+            "Agarwal se paise lene hain" states money owed to the owner; do not assume a new loan. "Rahul se paise mil gaye" means money received.
+            Set create_party true only when the owner explicitly asks to create/add the named party; never infer consent from mentioning a name.
+            When answering a pending party question, preserve its action, direction and amount. A message such as "Party Anisha Gajak" answers that question; it is not a greeting.
             A payment or a debt names the party and the amount. It does not name a product, a godown, or a quantity unless the owner is also moving goods.
             Use confirm_existing_debt as action when the owner is describing money that is already owed. Use cause new only when the owner says the debt is new.
             When the owner is greeting or is not stating a receipt, sale, payment, place, or reminder, leave the business fields null and put a short reply in reply.

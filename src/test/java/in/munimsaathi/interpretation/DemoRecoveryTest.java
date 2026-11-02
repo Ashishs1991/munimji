@@ -434,4 +434,95 @@ class DemoRecoveryTest {
         return new InterpretationOutcome[] {interpreter.interpret(s.userId(),"independent-sale",DAY,AT), interpreter.interpret(s.userId(),"independent-sale",DAY,AT)};
     }
 
+    @Test void anishaPartyAnswerContinuesPayableQuery() {
+        Shop s=shop(); UUID supplier=parties.create(s.userId(),"Anisha Gajak",PartyRole.SUPPLIER).getId();
+        posting.recordSupplierObligation(s.userId(),UUID.randomUUID(),supplier,500000L,"new",DAY,AT);
+        when(model.complete("Anisha ke panch hajar dene ha")).thenReturn("""
+          {"action":"party_balance","party_name":"Anisha","amount_paise":500000,"balance_side":"payable"}
+          """);
+        interpreter.interpret(s.userId(),"Anisha ke panch hajar dene ha",DAY,AT);
+        when(model.complete("Party Anisha Gajak")).thenReturn("""
+          {"turn":"answer_to_clarification","action":null,"party_name":"Anisha Gajak"}
+          """);
+        var result=interpreter.interpret(s.userId(),"Party Anisha Gajak",DAY,AT);
+        assertThat(result.draft()).isNull();
+        assertThat(result.answer()).contains("Payable","₹5000.00","Anisha Gajak");
+        assertThat(posting.supplierPayablePaise(s.userId(),supplier)).isEqualTo(500000L);
+    }
+    @Test void unknownAnishaRemainsAQuestionInsteadOfAGreeting() {
+        Shop s=shop();
+        when(model.complete("Anisha ko 5000 dene hain")).thenReturn("""
+          {"action":"party_balance","party_name":"Anisha","amount_paise":500000,"balance_side":"payable"}
+          """);
+        interpreter.interpret(s.userId(),"Anisha ko 5000 dene hain",DAY,AT);
+        when(model.complete("Party Anisha Gajak")).thenReturn("""
+          {"turn":"answer_to_clarification","action":null,"party_name":"Anisha Gajak"}
+          """);
+        var result=interpreter.interpret(s.userId(),"Party Anisha Gajak",DAY,AT);
+        assertThat(result.draft()).isNull();
+        assertThat(result.answer()).contains("Anisha Gajak").doesNotContain("Namaste");
+    }
+    @Test void payableStatementAsksWhetherDebtIsNewBeforeApproval() {
+        Shop s=shop();parties.create(s.userId(),"Anisha Gajak",PartyRole.SUPPLIER);
+        when(model.complete("Anisha Gajak ko 5000 dene hain")).thenReturn("""
+          {"turn":"new_action","action":"supplier_payable","party_name":"Anisha Gajak","amount_paise":500000}
+          """);
+        var result=interpreter.interpret(s.userId(),"Anisha Gajak ko 5000 dene hain",DAY,AT);
+        assertThat(result.draft().status()).isEqualTo(DraftStatus.NEEDS_CLARIFICATION);
+        assertThat(result.draft().missingFields()).contains("cause");
+    }
+
+    @Test void unknownSupplierCanBeCreatedThenNewPayableExplicitlyConfirmed() {
+        Shop s=shop();
+        when(model.complete("Anisha ko 5000 dene hain")).thenReturn("""
+          {"action":"party_balance","party_name":"Anisha","amount_paise":500000,"balance_side":"payable"}
+          """);
+        interpreter.interpret(s.userId(),"Anisha ko 5000 dene hain",DAY,AT);
+        when(model.complete("Party Anisha Gajak")).thenReturn("""
+          {"turn":"answer_to_clarification","party_name":"Anisha Gajak"}
+          """);
+        interpreter.interpret(s.userId(),"Party Anisha Gajak",DAY,AT);
+        when(model.complete("create supplier Anisha Gajak")).thenReturn("""
+          {"turn":"answer_to_clarification","party_name":"Anisha Gajak","create_party":true}
+          """);
+        var created=interpreter.interpret(s.userId(),"create supplier Anisha Gajak",DAY,AT);
+        assertThat(created.answer()).contains("Payable is ₹0.00","new amount");
+        UUID supplier=parties.findByName(s.userId(),"Anisha Gajak").get(0).getId();
+        assertThat(posting.supplierPayablePaise(s.userId(),supplier)).isZero();
+        when(model.complete("ye naya amount hai")).thenReturn("""
+          {"turn":"answer_to_clarification","cause":"new"}
+          """);
+        var proposed=interpreter.interpret(s.userId(),"ye naya amount hai",DAY,AT);
+        assertThat(proposed.draft().status()).isEqualTo(DraftStatus.AWAITING_APPROVAL);
+        assertThat(posting.supplierPayablePaise(s.userId(),supplier)).isZero();
+        drafts.approve(s.userId(),proposed.draft().id(),proposed.draft().version(),proposed.draft().contentHash());
+        assertThat(posting.supplierPayablePaise(s.userId(),supplier)).isEqualTo(500000L);
+    }
+    @Test void pendingPartyQuestionDoesNotCarryIntoAnotherBusinessOrNewAction() {
+        Shop s=shop();
+        when(model.complete("who do I owe")).thenReturn("{\"action\":\"party_balance\",\"balance_side\":\"payable\"}");
+        interpreter.interpret(s.userId(),"who do I owe",DAY,AT);
+        Business other=businesses.save(new Business(UUID.randomUUID(),"Other balance shop","Asia/Kolkata","INR"));
+        memberships.save(new Membership(UUID.randomUUID(),other.getId(),s.userId(),MembershipRole.OWNER));
+        tenants.selectBusiness(s.userId(),other.getId());
+        when(model.complete("Party Anisha Gajak")).thenReturn("{\"turn\":\"answer_to_clarification\",\"party_name\":\"Anisha Gajak\"}");
+        var separate=interpreter.interpret(s.userId(),"Party Anisha Gajak",DAY,AT);
+        assertThat(separate.answer()).doesNotContain("balance question is still open");
+        tenants.selectBusiness(s.userId(),s.businessId());
+        when(model.complete("new sale")).thenReturn("{\"turn\":\"new_action\",\"action\":\"sale\"}");
+        interpreter.interpret(s.userId(),"new sale",DAY,AT);
+        var noOldQuery=interpreter.interpret(s.userId(),"Party Anisha Gajak",DAY,AT);
+        assertThat(noOldQuery.answer()).doesNotContain("balance question is still open");
+    }
+
+    @Test void cancelingABalanceQuestionLeavesAnUnrelatedSaleIntact() {
+        Shop s=shop(); var sale=awaitingSale(s,"sale before question");
+        when(model.complete("whose balance")).thenReturn("{\"action\":\"party_balance\",\"balance_side\":\"payable\"}");
+        interpreter.interpret(s.userId(),"whose balance",DAY,AT);
+        when(model.complete("रद्द करो")).thenReturn("{\"turn\":\"cancel\"}");
+        var canceled=interpreter.interpret(s.userId(),"रद्द करो",DAY,AT);
+        assertThat(canceled.answer()).contains("balance question");
+        assertThat(draftRows.findById(sale.draft().id()).orElseThrow().getStatus()).isEqualTo(DraftStatus.AWAITING_APPROVAL);
+    }
+
 }

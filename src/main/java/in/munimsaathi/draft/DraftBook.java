@@ -779,7 +779,7 @@ public class DraftBook {
         if ("PAYMENT".equals(kind) && paymentMethod == null) {
             missing.add("payment_method");
         }
-        if ("RECEIVABLE".equals(kind) && cause == null) {
+        if (("RECEIVABLE".equals(kind) || "PAYABLE".equals(kind)) && cause == null) {
             missing.add("cause");
         }
         return missing;
