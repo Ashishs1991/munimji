@@ -14,6 +14,7 @@ import in.munimsaathi.draft.DraftRepository;
 import in.munimsaathi.draft.DraftStatus;
 import in.munimsaathi.evidence.DocumentStore;
 import in.munimsaathi.interpretation.CommandInterpreter;
+import in.munimsaathi.interpretation.ConversationMemory;
 import in.munimsaathi.interpretation.InterpretationOutcome;
 import in.munimsaathi.reminder.ProviderReceipt;
 import in.munimsaathi.reminder.ReminderBook;
@@ -43,6 +44,8 @@ public class WhatsAppTurn {
 
     private static final ZoneId ZONE = ZoneId.of("Asia/Kolkata");
     private static final Set<String> APPROVAL = Set.of("yes", "y", "haan", "han", "ha", "haan ji", "हाँ", "हां");
+    private static final Set<String> CANCEL = Set.of("cancel", "ruko", "chhodo");
+    private static final Set<String> RESUME = Set.of("resume", "wapas");
 
     private final MunimProperties properties;
     private final InboundMessageRepository messages;
@@ -60,6 +63,7 @@ public class WhatsAppTurn {
     private final ReminderTaskRepository reminderTasks;
     private final SessionReply session;
     private final TransactionTemplate transactions;
+    private final ConversationMemory memory;
 
     public WhatsAppTurn(
             MunimProperties properties,
@@ -77,7 +81,8 @@ public class WhatsAppTurn {
             ReminderBook reminders,
             ReminderTaskRepository reminderTasks,
             SessionReply session,
-            TransactionTemplate transactions
+            TransactionTemplate transactions,
+            ConversationMemory memory
     ) {
         this.properties = properties;
         this.messages = messages;
@@ -95,6 +100,7 @@ public class WhatsAppTurn {
         this.reminderTasks = reminderTasks;
         this.session = session;
         this.transactions = transactions;
+        this.memory = memory;
     }
 
     @Scheduled(fixedDelay = 5_000)
@@ -105,7 +111,7 @@ public class WhatsAppTurn {
         openStored();
     }
 
-    public void openStored() {
+    public synchronized void openStored() {
         for (InboundMessage message : messages.findByStatus(InboundStatus.STORED)) {
             UUID id = message.getId();
             Prepared prepared;
@@ -191,15 +197,20 @@ public class WhatsAppTurn {
         if (message.getBody() == null || message.getBody().isBlank()) {
             return new Prepared(message.getPhone(), "Send the instruction as text.");
         }
+        String word = message.getBody().trim().toLowerCase(Locale.ROOT);
+        if (CANCEL.contains(word)) {
+            return remembered(message, cancelOpen(message));
+        }
+        if (RESUME.contains(word)) {
+            return remembered(message, resumeOpen(message));
+        }
         LocalDate day = LocalDate.now(ZONE);
         Instant now = Instant.now();
-        List<Draft> open = openDrafts(message.getUserId());
-        UUID followUp = open.size() == 1 ? open.get(0).getId() : null;
-        InterpretationOutcome outcome = interpreter.interpret(message.getUserId(), message.getBody(), followUp, day, now);
+        InterpretationOutcome outcome = interpreter.interpret(message.getUserId(), message.getBody(), null, day, now);
         if (outcome.draft() != null) {
             message.attachDraft(outcome.draft().id());
         }
-        return new Prepared(message.getPhone(), reply(outcome));
+        return remembered(message, reply(outcome));
     }
 
     private Prepared approveBound(InboundMessage message) {
@@ -234,8 +245,13 @@ public class WhatsAppTurn {
         Instant now = Instant.now();
         if (type.startsWith("audio/")) {
             var capture = voice.capture(message.getUserId(), type, "whatsapp-voice", bytes, day, now);
-            message.attachDraft(capture.draft().id());
-            return new Prepared(message.getPhone(), details(message.getUserId(), capture.draft().id()));
+            if (capture.draft() != null) {
+                message.attachDraft(capture.draft().id());
+            }
+            String text = capture.draft() == null
+                    ? (capture.answer() == null ? "Namaste. Tell me what was received, sold, or paid." : capture.answer())
+                    : reply(new InterpretationOutcome(capture.draft(), List.of(), null, capture.answer()));
+            return remembered(message, text);
         }
         if (type.startsWith("image/") || "application/pdf".equals(type)) {
             UUID draftId = message.getDraftId();
@@ -266,6 +282,38 @@ public class WhatsAppTurn {
                 message.recordAttempt(attempt);
             }
         });
+    }
+
+    private Prepared remembered(InboundMessage message, String text) {
+        memory.remember(message.getUserId(), "owner", message.getBody());
+        memory.remember(message.getUserId(), "assistant", text);
+        return new Prepared(message.getPhone(), text);
+    }
+
+    private String cancelOpen(InboundMessage message) {
+        List<Draft> open = openDrafts(message.getUserId());
+        if (open.size() == 1) {
+            drafts.cancel(message.getUserId(), open.get(0).getId());
+            return "Cancelled. Nothing was posted.";
+        }
+        if (open.isEmpty()) {
+            return "There is no open draft to cancel.";
+        }
+        return "Which draft should I cancel?";
+    }
+
+    private String resumeOpen(InboundMessage message) {
+        List<Draft> suspended = draftRows.findByBusinessIdAndStatus(message.getBusinessId(), DraftStatus.SUSPENDED).stream()
+                .filter(draft -> !draft.getExpiresAt().isBefore(Instant.now()))
+                .toList();
+        if (suspended.size() == 1) {
+            drafts.resume(message.getUserId(), suspended.get(0).getId());
+            return "Resumed. " + details(message.getUserId(), suspended.get(0).getId());
+        }
+        if (suspended.isEmpty()) {
+            return "There is no suspended draft to resume.";
+        }
+        return "Which draft should I resume?";
     }
 
     private List<Draft> openDrafts(UUID userId) {
@@ -340,6 +388,9 @@ public class WhatsAppTurn {
                 case "price" -> "the price";
                 case "action" -> "whether this is a receipt, a sale, or a payment";
                 case "date" -> "the date";
+                case "amount" -> "the amount";
+                case "payment_method" -> "cash or UPI";
+                case "cause" -> "whether this amount is new";
                 default -> field.startsWith("line-") ? "line " + field.substring("line-".length()) : field;
             };
             if (!word.isBlank()) {
@@ -393,6 +444,12 @@ public class WhatsAppTurn {
                 text.append(' ');
             }
             text.append("at ").append(godown);
+        }
+        if (draft.getPaymentMethod() != null) {
+            if (!text.isEmpty()) {
+                text.append(' ');
+            }
+            text.append(draft.getPaymentMethod());
         }
         if (draft.getAmountPaise() != null) {
             if (!text.isEmpty()) {

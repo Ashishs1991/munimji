@@ -30,6 +30,7 @@ import java.math.BigDecimal;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.time.LocalTime;
+import java.time.ZoneId;
 import java.time.format.DateTimeParseException;
 import java.util.ArrayList;
 import java.util.List;
@@ -62,6 +63,7 @@ public class CommandInterpreter {
     private final PostingService posting;
     private final LocationBook locations;
     private final ReminderBook reminders;
+    private final ConversationMemory memory;
 
     public CommandInterpreter(
             LanguageModel model,
@@ -74,7 +76,8 @@ public class CommandInterpreter {
             EwayBook eway,
             PostingService posting,
             LocationBook locations,
-            ReminderBook reminders
+            ReminderBook reminders,
+            ConversationMemory memory
     ) {
         this.model = model;
         this.mapper = mapper;
@@ -87,6 +90,7 @@ public class CommandInterpreter {
         this.posting = posting;
         this.locations = locations;
         this.reminders = reminders;
+        this.memory = memory;
     }
 
     @Transactional
@@ -99,7 +103,13 @@ public class CommandInterpreter {
         if (text == null || text.isBlank()) {
             throw new IllegalArgumentException("A command is required.");
         }
-        String modelText = model.complete(text);
+        TurnContext.set(context(userId));
+        String modelText;
+        try {
+            modelText = model.complete(text);
+        } finally {
+            TurnContext.clear();
+        }
         JsonNode reply = commandJson(modelText);
         if (reply == null) {
             return new InterpretationOutcome(null, List.of(), null, modelText.trim());
@@ -131,42 +141,138 @@ public class CommandInterpreter {
     ) {
         List<String> refused = refusedTools(reply);
         UUID ewayDraftId = ewayDraft(userId, reply);
-        String intent = text(reply, "intent");
+        String intent = firstText(reply, "action", "intent");
         String normalized = intent == null ? "" : intent.toLowerCase(Locale.ROOT);
         String action = switch (normalized) {
             case "sale" -> "sale";
-            case "receive", "purchase" -> "receive";
+            case "receive", "purchase", "goods_received" -> "receive";
+            case "customer_payment_received", "payment_received", "payment" -> "payment";
+            case "standalone_receivable", "receivable" -> "receivable";
+            case "supplier_payable", "payable" -> "payable";
             default -> null;
         };
-        boolean supplier = "receive".equals(action);
+        boolean supplier = "receive".equals(action) || "payable".equals(action);
         UUID customerId = party(userId, text(reply, "party_name"), supplier);
+        if (customerId == null && text(reply, "party_name") == null && ("payment".equals(action) || "receivable".equals(action))) {
+            List<Party> owing = parties.list(userId).stream()
+                    .filter(party -> party.getRole() == PartyRole.CUSTOMER || party.getRole() == PartyRole.BOTH)
+                    .filter(party -> posting.customerReceivablePaise(userId, party.getId()) > 0)
+                    .toList();
+            if (owing.size() == 1) {
+                customerId = owing.get(0).getId();
+            }
+        }
         UUID productId = product(userId, text(reply, "product_name"));
         UUID locationId = location(userId, text(reply, "location_code"));
         BigDecimal quantity = quantity(reply.get("quantity"));
         String unit = text(reply, "unit");
         Long amount = amount(reply.get("amount_paise"));
+        boolean money = "payment".equals(action) || "receivable".equals(action) || "payable".equals(action);
         JsonNode lineNodes = reply.get("lines");
-        if (lineNodes != null && lineNodes.isArray() && !lineNodes.isEmpty()) {
+        if (!money && lineNodes != null && lineNodes.isArray() && !lineNodes.isEmpty()) {
             List<DraftLineSpec> specs = new ArrayList<>();
             for (JsonNode node : lineNodes) {
                 specs.add(lineSpec(userId, node));
             }
-            DraftProposal draft = draftId == null
+            UUID lineTarget = draftId;
+            if (draftId != null && action != null) {
+                String openKind = drafts.kindOf(userId, draftId);
+                String nextKind = kindOf(action);
+                if (openKind != null && nextKind != null && !openKind.equals(nextKind)) {
+                    drafts.suspend(userId, draftId);
+                    lineTarget = null;
+                }
+            }
+            DraftProposal draft = lineTarget == null
                     ? drafts.proposeLines(userId, action, customerId, locationId, specs, occurredOn, occurredAt)
-                    : drafts.replaceLines(userId, draftId, action, customerId, locationId, specs, occurredOn, occurredAt);
+                    : drafts.replaceLines(userId, lineTarget, action, customerId, locationId, specs, occurredOn, occurredAt);
             return new InterpretationOutcome(draft, refused, ewayDraftId, null);
+        }
+        String turn = text(reply, "turn");
+        if ("cancel".equals(turn)) {
+            if (draftId != null) {
+                drafts.cancel(userId, draftId);
+            }
+            return new InterpretationOutcome(null, refused, ewayDraftId, "Cancelled. Nothing was posted.");
+        }
+        if ("locate".equals(normalized) || "locate_goods".equals(normalized)) {
+            return new InterpretationOutcome(null, refused, ewayDraftId, answerFor(userId, "locate", customerId, productId, reply));
+        }
+        if ("party_balance".equals(normalized) || "balance".equals(normalized) || "confirm_existing_debt".equals(normalized)) {
+            if ("confirm_existing_debt".equals(normalized) && customerId != null && amount != null
+                    && posting.customerReceivablePaise(userId, customerId) == amount) {
+                return new InterpretationOutcome(null, refused, ewayDraftId,
+                        "That amount is already recorded. I will not add it again.");
+            }
+            String balance = answerFor(userId, "balance", customerId, productId, reply);
+            return new InterpretationOutcome(null, refused, ewayDraftId, balance != null ? balance : spoken(reply));
         }
         String answer = answerFor(userId, normalized, customerId, productId, reply);
         if (answer != null) {
             return new InterpretationOutcome(null, refused, ewayDraftId, answer);
         }
-        if (action == null && customerId == null && productId == null && locationId == null
-                && quantity == null && unit == null && amount == null) {
+        String method = text(reply, "payment_method");
+        boolean stated = action != null || customerId != null || productId != null || locationId != null
+                || quantity != null || unit != null || amount != null || method != null;
+        if (!stated) {
             return new InterpretationOutcome(null, refused, ewayDraftId, spoken(reply));
         }
-        DraftProposal draft = draftId == null
+        if ("receivable".equals(action) && "existing".equalsIgnoreCase(text(reply, "cause")) && customerId != null && amount != null) {
+            long owed = posting.customerReceivablePaise(userId, customerId);
+            if (owed == amount) {
+                return new InterpretationOutcome(null, refused, ewayDraftId, "That amount is already recorded. I will not add it again.");
+            }
+            return new InterpretationOutcome(null, refused, ewayDraftId, "That amount is not the balance I have. Say the new amount if it is new.");
+        }
+        if (Boolean.TRUE.equals(flag(reply, "create_party")) && customerId == null && text(reply, "party_name") != null) {
+            PartyRole role = "receive".equals(action) || "payable".equals(action) ? PartyRole.SUPPLIER : PartyRole.CUSTOMER;
+            customerId = parties.create(userId, text(reply, "party_name"), role).getId();
+        }
+        boolean locationOnly = action == null && locationId != null && quantity == null && unit == null
+                && amount == null && customerId == null && productId == null && method == null;
+        if (locationOnly) {
+            long needing = drafts.open(userId).stream()
+                    .filter(draft -> draft.missing() != null && draft.missing().contains("location"))
+                    .count();
+            if (needing > 1) {
+                return new InterpretationOutcome(null, refused, ewayDraftId, "Which draft should get that godown?");
+            }
+        }
+        UUID bound = bindDraft(userId, draftId, turn, action, customerId, productId, locationId, quantity, unit, amount, method);
+        String boundKind = bound == null ? null : drafts.kindOf(userId, bound);
+        boolean moneyDraft = money || "PAYMENT".equals(boundKind) || "RECEIVABLE".equals(boundKind) || "PAYABLE".equals(boundKind);
+        if (moneyDraft) {
+            String moneyAction = action != null ? action : switch (boundKind) {
+                case "RECEIVABLE" -> "receivable";
+                case "PAYABLE" -> "payable";
+                default -> "payment";
+            };
+            UUID allocates = null;
+            if ("payment".equals(moneyAction) && customerId != null && amount != null && flag(reply, "allocate") != Boolean.FALSE) {
+                allocates = posting.soleOpenSale(userId, customerId, amount).orElse(null);
+            }
+            String direction = "payable".equals(moneyAction) ? "payable" : "receivable";
+            DraftProposal draft = bound == null
+                    ? drafts.proposeMoney(userId, moneyAction, customerId, amount, method, allocates, text(reply, "cause"), direction, occurredOn, occurredAt)
+                    : drafts.continueMoney(userId, bound, moneyAction, customerId, amount, method, allocates, text(reply, "cause"), direction, occurredOn, occurredAt);
+            String note = clarification(userId, text(reply, "party_name"), customerId, supplier, null, productId);
+            if (customerId == null && text(reply, "party_name") == null) {
+                note = join(note, "Who was this?");
+            }
+            if (customerId == null && text(reply, "party_name") != null) {
+                note = join(note, "Say create if I should add this party.");
+            }
+            if (draft.missingFields().contains("payment_method")) {
+                note = join(note, "Cash or UPI?");
+            }
+            if (draft.missingFields().contains("cause")) {
+                note = join(note, "Is this a new amount you gave, or an existing balance?");
+            }
+            return new InterpretationOutcome(draft, refused, ewayDraftId, note);
+        }
+        DraftProposal draft = bound == null
                 ? drafts.propose(userId, action, customerId, productId, locationId, quantity, unit, amount, occurredOn, occurredAt)
-                : drafts.continueDraft(userId, draftId, action, customerId, productId, locationId, quantity, unit, amount, occurredOn, occurredAt);
+                : drafts.continueDraft(userId, bound, action, customerId, productId, locationId, quantity, unit, amount, occurredOn, occurredAt);
         return new InterpretationOutcome(
                 draft,
                 refused,
@@ -481,6 +587,158 @@ public class CommandInterpreter {
             current = swap;
         }
         return previous[right.length()];
+    }
+
+    private String context(UUID userId) {
+        StringBuilder text = new StringBuilder();
+        text.append("now=").append(LocalDate.now(ZoneId.of("Asia/Kolkata")));
+        String history = memory.recent(userId);
+        if (!history.isBlank()) {
+            text.append("\nrecent:\n").append(history);
+        }
+        List<DraftBook.OpenDraft> open = drafts.open(userId);
+        if (!open.isEmpty()) {
+            text.append("\nopen drafts:");
+            for (DraftBook.OpenDraft draft : open) {
+                text.append('\n').append(draft.id()).append(' ').append(draft.kind()).append(" missing=").append(draft.missing());
+            }
+        }
+        List<Party> known = parties.list(userId);
+        if (!known.isEmpty()) {
+            text.append("\nparties:");
+            int count = 0;
+            for (Party party : known) {
+                if (count == 20) {
+                    break;
+                }
+                text.append(' ').append(party.getDisplayName());
+                count++;
+            }
+        }
+        return text.toString();
+    }
+
+    private UUID bindDraft(
+            UUID userId,
+            UUID draftId,
+            String turn,
+            String action,
+            UUID customerId,
+            UUID productId,
+            UUID locationId,
+            BigDecimal quantity,
+            String unit,
+            Long amount,
+            String method
+    ) {
+        List<DraftBook.OpenDraft> open = drafts.open(userId);
+        if ("new_action".equals(turn) && action != null) {
+            if (money(kindOf(action))) {
+                suspendDifferent(userId, open, kindOf(action));
+            }
+            return null;
+        }
+        boolean locationOnly = action == null && locationId != null && quantity == null && unit == null
+                && amount == null && customerId == null && productId == null && method == null;
+        if (locationOnly) {
+            List<DraftBook.OpenDraft> needing = open.stream()
+                    .filter(draft -> draft.missing() != null && draft.missing().contains("location"))
+                    .toList();
+            if (needing.size() == 1) {
+                return needing.get(0).id();
+            }
+            if (needing.size() > 1) {
+                return null;
+            }
+        }
+        if (draftId != null) {
+            DraftBook.OpenDraft selected = open.stream().filter(draft -> draft.id().equals(draftId)).findFirst().orElse(null);
+            if (selected != null && action != null && !kindOf(action).equals(selected.kind())) {
+                if (money(kindOf(action))) {
+                    drafts.suspend(userId, selected.id());
+                }
+                return null;
+            }
+            if (selected != null && (action == null || kindOf(action).equals(selected.kind()))) {
+                return selected.id();
+            }
+        }
+        if (action != null) {
+            String kind = kindOf(action);
+            List<DraftBook.OpenDraft> same = open.stream().filter(draft -> kind.equals(draft.kind())).toList();
+            if (same.size() == 1 && (turn == null || "answer_to_clarification".equals(turn) || "edit_action".equals(turn))) {
+                return same.get(0).id();
+            }
+            if (money(kind)) {
+                suspendDifferent(userId, open, kind);
+            }
+            return null;
+        }
+        if (open.size() == 1 && (turn == null || "answer_to_clarification".equals(turn) || "edit_action".equals(turn))) {
+            return open.get(0).id();
+        }
+        return null;
+    }
+
+    private void suspendDifferent(UUID userId, List<DraftBook.OpenDraft> open, String kind) {
+        for (DraftBook.OpenDraft draft : open) {
+            if (!kind.equals(draft.kind())) {
+                drafts.suspend(userId, draft.id());
+            }
+        }
+    }
+
+    private static boolean money(String kind) {
+        return "PAYMENT".equals(kind) || "RECEIVABLE".equals(kind) || "PAYABLE".equals(kind);
+    }
+
+    private static String kindOf(String action) {
+        return switch (action) {
+            case "sale" -> "SALE";
+            case "receive" -> "RECEIPT";
+            case "payment" -> "PAYMENT";
+            case "receivable" -> "RECEIVABLE";
+            case "payable" -> "PAYABLE";
+            default -> null;
+        };
+    }
+
+    private static String firstText(JsonNode reply, String... fields) {
+        for (String field : fields) {
+            String value = text(reply, field);
+            if (value != null) {
+                return value;
+            }
+        }
+        return null;
+    }
+
+    private static Boolean flag(JsonNode reply, String field) {
+        JsonNode node = reply.get(field);
+        if (node == null || node.isNull()) {
+            return null;
+        }
+        if (node.isBoolean()) {
+            return node.booleanValue();
+        }
+        String value = node.asText("").trim().toLowerCase(Locale.ROOT);
+        if ("true".equals(value) || "yes".equals(value)) {
+            return true;
+        }
+        if ("false".equals(value) || "no".equals(value)) {
+            return false;
+        }
+        return null;
+    }
+
+    private static String join(String left, String right) {
+        if (left == null || left.isBlank()) {
+            return right;
+        }
+        if (right == null || right.isBlank()) {
+            return left;
+        }
+        return left + " " + right;
     }
 
     private UUID party(UUID userId, String name, boolean supplier) {

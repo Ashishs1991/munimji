@@ -18,7 +18,6 @@ import in.munimsaathi.evidence.Evidence;
 import in.munimsaathi.evidence.EvidenceRepository;
 import in.munimsaathi.interpretation.CommandInterpreter;
 import in.munimsaathi.interpretation.InterpretationOutcome;
-import in.munimsaathi.interpretation.LanguageModel;
 import in.munimsaathi.interpretation.Transcriber;
 import in.munimsaathi.tenant.Godown;
 import in.munimsaathi.tenant.GodownRepository;
@@ -46,7 +45,6 @@ public class VoiceReceipts {
 
     private final TenantContext tenants;
     private final Transcriber transcriber;
-    private final LanguageModel model;
     private final CommandInterpreter interpreter;
     private final ObjectMapper mapper;
     private final PartyBook parties;
@@ -60,7 +58,6 @@ public class VoiceReceipts {
     public VoiceReceipts(
             TenantContext tenants,
             Transcriber transcriber,
-            LanguageModel model,
             CommandInterpreter interpreter,
             ObjectMapper mapper,
             PartyBook parties,
@@ -73,7 +70,6 @@ public class VoiceReceipts {
     ) {
         this.tenants = tenants;
         this.transcriber = transcriber;
-        this.model = model;
         this.interpreter = interpreter;
         this.mapper = mapper;
         this.parties = parties;
@@ -105,29 +101,20 @@ public class VoiceReceipts {
         if (transcript == null || transcript.isBlank()) {
             throw new IllegalArgumentException("The voice note had no transcript.");
         }
-        InterpretationOutcome outcome = interpreter.applyExtraction(
-                userId,
-                null,
-                model.complete(transcript),
-                occurredOn,
-                occurredAt
-        );
-        if (outcome.draft() == null) {
-            throw new IllegalArgumentException("The model reply was not readable.");
-        }
+        InterpretationOutcome outcome = interpreter.interpret(userId, transcript, null, occurredOn, occurredAt);
         DraftProposal draft = outcome.draft();
         UUID businessId = tenants.currentBusinessId(userId);
         Evidence stored = evidence.save(new Evidence(
                 UUID.randomUUID(),
                 businessId,
-                draft.id(),
+                draft == null ? null : draft.id(),
                 type,
                 fileName,
                 sha256(audio),
                 audio,
                 Instant.now()
         ));
-        return new VoiceCapture(draft, stored.getId(), transcript);
+        return new VoiceCapture(draft, stored.getId(), transcript, outcome.answer());
     }
 
     private List<DraftLineSpec> lines(UUID userId, JsonNode reply) {
@@ -238,6 +225,6 @@ public class VoiceReceipts {
         }
     }
 
-    public record VoiceCapture(DraftProposal draft, UUID evidenceId, String transcript) {
+    public record VoiceCapture(DraftProposal draft, UUID evidenceId, String transcript, String answer) {
     }
 }

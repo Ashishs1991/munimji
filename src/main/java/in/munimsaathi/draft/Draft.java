@@ -74,6 +74,18 @@ public class Draft {
     @Column(name = "presented_hash")
     private String presentedHash;
 
+    @Column(name = "payment_method")
+    private String paymentMethod;
+
+    @Column(name = "allocates_document_id")
+    private UUID allocatesDocumentId;
+
+    @Column
+    private String cause;
+
+    @Column
+    private String direction;
+
     protected Draft() {
     }
 
@@ -156,9 +168,44 @@ public class Draft {
         return presentedHash;
     }
 
+    public String getPaymentMethod() {
+        return paymentMethod;
+    }
+
+    public UUID getAllocatesDocumentId() {
+        return allocatesDocumentId;
+    }
+
+    public String getCause() {
+        return cause;
+    }
+
+    public String getDirection() {
+        return direction;
+    }
+
     public void present() {
         this.presentedVersion = this.version;
         this.presentedHash = this.contentHash;
+    }
+
+    void rememberMoney(String paymentMethod, UUID allocatesDocumentId, String cause, String direction) {
+        this.paymentMethod = paymentMethod;
+        this.allocatesDocumentId = allocatesDocumentId;
+        this.cause = cause;
+        this.direction = direction;
+    }
+
+    void suspend() {
+        this.status = DraftStatus.SUSPENDED;
+    }
+
+    void resume(DraftStatus status) {
+        this.status = status;
+    }
+
+    void cancel() {
+        this.status = DraftStatus.CANCELED;
     }
 
     void replace(

@@ -338,6 +338,111 @@ public class DraftBook {
         return view(requireDraft(tenants.currentBusinessId(userId), draftId));
     }
 
+    @Transactional(readOnly = true)
+    public String kindOf(UUID userId, UUID draftId) {
+        return requireDraft(tenants.currentBusinessId(userId), draftId).getKind();
+    }
+
+    @Transactional(readOnly = true)
+    public List<OpenDraft> open(UUID userId) {
+        UUID businessId = tenants.currentBusinessId(userId);
+        return drafts.findByBusinessIdAndStatusIn(
+                businessId,
+                List.of(DraftStatus.NEEDS_CLARIFICATION, DraftStatus.AWAITING_APPROVAL)
+        ).stream()
+                .filter(draft -> !draft.getExpiresAt().isBefore(Instant.now()))
+                .map(draft -> new OpenDraft(
+                        draft.getId(),
+                        draft.getKind(),
+                        draft.getMissingFields() == null ? "" : draft.getMissingFields(),
+                        draft.getVersion(),
+                        draft.getAmountPaise()
+                ))
+                .toList();
+    }
+
+    @Transactional
+    public DraftProposal proposeMoney(
+            UUID userId,
+            String action,
+            UUID partyId,
+            Long amountPaise,
+            String paymentMethod,
+            UUID allocatesDocumentId,
+            String cause,
+            String direction,
+            LocalDate occurredOn,
+            Instant occurredAt
+    ) {
+        UUID businessId = tenants.currentBusinessId(userId);
+        Draft draft = new Draft(UUID.randomUUID(), businessId, userId);
+        DraftProposal proposal = writeMoney(draft, action, partyId, amountPaise, paymentMethod, allocatesDocumentId, cause, direction, occurredOn, occurredAt);
+        drafts.save(draft);
+        return proposal;
+    }
+
+    @Transactional
+    public DraftProposal continueMoney(
+            UUID userId,
+            UUID draftId,
+            String action,
+            UUID partyId,
+            Long amountPaise,
+            String paymentMethod,
+            UUID allocatesDocumentId,
+            String cause,
+            String direction,
+            LocalDate occurredOn,
+            Instant occurredAt
+    ) {
+        Draft draft = requireDraft(tenants.currentBusinessId(userId), draftId);
+        if (draft.getStatus() == DraftStatus.POSTED) {
+            throw new IllegalArgumentException("A posted proposal cannot be edited.");
+        }
+        return writeMoney(
+                draft,
+                action != null ? action : draft.getKind(),
+                partyId != null ? partyId : draft.getCustomerId(),
+                amountPaise != null ? amountPaise : draft.getAmountPaise(),
+                paymentMethod != null ? paymentMethod : draft.getPaymentMethod(),
+                allocatesDocumentId != null ? allocatesDocumentId : draft.getAllocatesDocumentId(),
+                cause != null ? cause : draft.getCause(),
+                direction != null ? direction : draft.getDirection(),
+                draft.getOccurredOn() != null ? draft.getOccurredOn() : occurredOn,
+                draft.getOccurredAt() != null ? draft.getOccurredAt() : occurredAt
+        );
+    }
+
+    @Transactional
+    public void suspend(UUID userId, UUID draftId) {
+        Draft draft = requireDraft(tenants.currentBusinessId(userId), draftId);
+        if (draft.getStatus() == DraftStatus.NEEDS_CLARIFICATION || draft.getStatus() == DraftStatus.AWAITING_APPROVAL) {
+            draft.suspend();
+        }
+    }
+
+    @Transactional
+    public DraftProposal resume(UUID userId, UUID draftId) {
+        Draft draft = requireDraft(tenants.currentBusinessId(userId), draftId);
+        if (draft.getStatus() != DraftStatus.SUSPENDED) {
+            throw new IllegalArgumentException("There is no suspended draft to resume.");
+        }
+        boolean ready = draft.getMissingFields() == null || draft.getMissingFields().isBlank();
+        draft.resume(ready ? DraftStatus.AWAITING_APPROVAL : DraftStatus.NEEDS_CLARIFICATION);
+        return view(draft);
+    }
+
+    @Transactional
+    public void cancel(UUID userId, UUID draftId) {
+        Draft draft = requireDraft(tenants.currentBusinessId(userId), draftId);
+        if (draft.getStatus() != DraftStatus.POSTED) {
+            draft.cancel();
+        }
+    }
+
+    public record OpenDraft(UUID id, String kind, String missing, long version, Long amountPaise) {
+    }
+
     @Transactional
     public UUID approve(UUID userId, UUID draftId, long version, String contentHash) {
         UUID businessId = tenants.currentBusinessId(userId);
@@ -383,6 +488,51 @@ public class DraftBook {
     }
 
     private UUID post(UUID userId, Draft draft) {
+        if ("PAYMENT".equals(draft.getKind())) {
+            if (draft.getAllocatesDocumentId() != null) {
+                return posting.receivePayment(
+                        userId,
+                        draft.getId(),
+                        draft.getCustomerId(),
+                        draft.getAllocatesDocumentId(),
+                        draft.getAmountPaise(),
+                        draft.getPaymentMethod(),
+                        draft.getOccurredOn(),
+                        draft.getOccurredAt()
+                );
+            }
+            return posting.receiveUnallocated(
+                    userId,
+                    draft.getId(),
+                    draft.getCustomerId(),
+                    draft.getAmountPaise(),
+                    draft.getPaymentMethod(),
+                    draft.getOccurredOn(),
+                    draft.getOccurredAt()
+            );
+        }
+        if ("RECEIVABLE".equals(draft.getKind())) {
+            return posting.recordStandaloneReceivable(
+                    userId,
+                    draft.getId(),
+                    draft.getCustomerId(),
+                    draft.getAmountPaise(),
+                    draft.getCause(),
+                    draft.getOccurredOn(),
+                    draft.getOccurredAt()
+            );
+        }
+        if ("PAYABLE".equals(draft.getKind())) {
+            return posting.recordSupplierObligation(
+                    userId,
+                    draft.getId(),
+                    draft.getCustomerId(),
+                    draft.getAmountPaise(),
+                    draft.getCause(),
+                    draft.getOccurredOn(),
+                    draft.getOccurredAt()
+            );
+        }
         List<DraftLine> rows = draftLines.findByDraftIdOrderByLineNumberAsc(draft.getId());
         if ("RECEIPT".equals(draft.getKind())) {
             return receive(userId, draft, rows);
@@ -548,10 +698,91 @@ public class DraftBook {
         if (SALE.equalsIgnoreCase(normalized)) {
             return SALE;
         }
-        if ("receive".equalsIgnoreCase(normalized) || "purchase".equalsIgnoreCase(normalized) || "RECEIPT".equalsIgnoreCase(normalized)) {
+        if ("receive".equalsIgnoreCase(normalized) || "purchase".equalsIgnoreCase(normalized) || "RECEIPT".equalsIgnoreCase(normalized) || "goods_received".equalsIgnoreCase(normalized)) {
             return "RECEIPT";
         }
+        if ("payment".equalsIgnoreCase(normalized) || "PAYMENT".equalsIgnoreCase(normalized) || "customer_payment_received".equalsIgnoreCase(normalized)) {
+            return "PAYMENT";
+        }
+        if ("receivable".equalsIgnoreCase(normalized) || "RECEIVABLE".equalsIgnoreCase(normalized) || "standalone_receivable".equalsIgnoreCase(normalized)) {
+            return "RECEIVABLE";
+        }
+        if ("payable".equalsIgnoreCase(normalized) || "PAYABLE".equalsIgnoreCase(normalized) || "supplier_payable".equalsIgnoreCase(normalized)) {
+            return "PAYABLE";
+        }
         throw new IllegalArgumentException("Unknown action.");
+    }
+
+    private DraftProposal writeMoney(
+            Draft draft,
+            String action,
+            UUID partyId,
+            Long amountPaise,
+            String paymentMethod,
+            UUID allocatesDocumentId,
+            String cause,
+            String direction,
+            LocalDate occurredOn,
+            Instant occurredAt
+    ) {
+        if (amountPaise != null && amountPaise <= 0) {
+            throw new IllegalArgumentException("A price must be greater than zero.");
+        }
+        String kind = actionKind(action);
+        String method = paymentMethod == null || paymentMethod.isBlank() ? null : paymentMethod.trim();
+        String why = cause == null || cause.isBlank() ? null : cause.trim();
+        String way = direction == null || direction.isBlank() ? null : direction.trim();
+        List<String> missing = moneyMissing(kind, partyId, amountPaise, method, why, occurredOn, occurredAt);
+        long nextVersion = draft.getVersion() + 1;
+        String extra = text(method) + "|" + text(allocatesDocumentId) + "|" + text(why) + "|" + text(way);
+        draft.rememberMoney(method, allocatesDocumentId, why, way);
+        draft.replace(
+                kind,
+                missing.isEmpty() ? DraftStatus.AWAITING_APPROVAL : DraftStatus.NEEDS_CLARIFICATION,
+                hash(nextVersion, kind, partyId, null, null, null, null, amountPaise, occurredOn, occurredAt, extra),
+                partyId,
+                null,
+                null,
+                null,
+                null,
+                amountPaise,
+                occurredOn,
+                occurredAt,
+                String.join(",", missing),
+                Instant.now().plus(2, ChronoUnit.HOURS)
+        );
+        return view(draft);
+    }
+
+    private static List<String> moneyMissing(
+            String kind,
+            UUID partyId,
+            Long amountPaise,
+            String paymentMethod,
+            String cause,
+            LocalDate occurredOn,
+            Instant occurredAt
+    ) {
+        List<String> missing = new ArrayList<>();
+        if (kind == null) {
+            missing.add("action");
+        }
+        if (occurredOn == null || occurredAt == null) {
+            missing.add("date");
+        }
+        if (partyId == null) {
+            missing.add("party");
+        }
+        if (amountPaise == null) {
+            missing.add("amount");
+        }
+        if ("PAYMENT".equals(kind) && paymentMethod == null) {
+            missing.add("payment_method");
+        }
+        if ("RECEIVABLE".equals(kind) && cause == null) {
+            missing.add("cause");
+        }
+        return missing;
     }
 
     private static List<String> missing(

@@ -21,8 +21,12 @@ public class MetaLanguageModel implements LanguageModel {
     private static final Logger log = LoggerFactory.getLogger(MetaLanguageModel.class);
 
     static final String INSTRUCTIONS = """
-            Return one JSON object with keys intent, party_name, product_name, quantity, unit, amount_paise, location_code, reminder_date, reminder_time, lines, requested_tools, and reply.
-            intent is sale, receive, purchase, balance, locate, reminder, or null. quantity is a decimal string or null. Leave a field null when the message does not state it.
+            Return one JSON object with keys turn, action, intent, party_name, product_name, quantity, unit, amount_paise, payment_method, cause, location_code, reminder_date, reminder_time, lines, create_party, requested_tools, and reply.
+            turn is new_action, answer_to_clarification, edit_action, read_query, approve, cancel, or unclear.
+            action is sale, goods_received, customer_payment_received, standalone_receivable, supplier_payable, party_balance, locate_goods, or null.
+            intent may repeat action for a sale or a receipt. quantity is a decimal string or null. Leave a field null when the message does not state it.
+            A payment or a debt names the party and the amount. It does not name a product, a godown, or a quantity unless the owner is also moving goods.
+            Use confirm_existing_debt as action when the owner is describing money that is already owed. Use cause new only when the owner says the debt is new.
             When the owner is greeting or is not stating a receipt, sale, payment, place, or reminder, leave the business fields null and put a short reply in reply.
             lines is an array of product_name, quantity, unit, and amount_paise when the owner names more than one item. A single item uses the top-level fields.
             reminder_date is yyyy-mm-dd and reminder_time is HH:mm only when the owner stated them.
@@ -122,10 +126,15 @@ public class MetaLanguageModel implements LanguageModel {
 
     private byte[] payload(String model, Object userContent) {
         try {
+            String instructions = INSTRUCTIONS;
+            String context = TurnContext.current();
+            if (context != null && !context.isBlank()) {
+                instructions = instructions + "\nCurrent business context, for this business only:\n" + context;
+            }
             return mapper.writeValueAsBytes(Map.of(
                     "model", model,
                     "messages", List.of(
-                            Map.of("role", "system", "content", INSTRUCTIONS),
+                            Map.of("role", "system", "content", instructions),
                             Map.of("role", "user", "content", userContent)
                     )
             ));

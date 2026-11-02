@@ -8,5 +8,7 @@ public enum DocumentKind {
     SUPPLIER_BILL,
     SUPPLIER_PAYMENT,
     REFUND,
-    OPENING
+    OPENING,
+    LOAN,
+    PAYABLE_NOTE
 }

@@ -887,6 +887,107 @@ public class PostingService {
         return document.getId();
     }
 
+    @Transactional
+    public UUID recordStandaloneReceivable(
+            UUID userId,
+            UUID operationId,
+            UUID partyId,
+            long amountPaise,
+            String cause,
+            LocalDate occurredOn,
+            Instant occurredAt
+    ) {
+        UUID businessId = tenants.currentBusinessId(userId);
+        Optional<UUID> prior = alreadyPosted(businessId, operationId);
+        if (prior.isPresent()) {
+            return prior.get();
+        }
+        requirePositive(amountPaise);
+        requireParty(businessId, partyId, PartyRole.CUSTOMER);
+        requireWhen(occurredOn, occurredAt);
+        if (cause == null || cause.isBlank()) {
+            throw new IllegalArgumentException("Say whether this receivable is new.");
+        }
+        operations.saveAndFlush(new PostedOperation(operationId, businessId, "STANDALONE_RECEIVABLE", userId));
+        PostedDocument document = documents.saveAndFlush(new PostedDocument(
+                UUID.randomUUID(),
+                businessId,
+                partyId,
+                DocumentKind.LOAN,
+                occurredOn,
+                amountPaise,
+                operationId,
+                null,
+                FinanceStatus.RECORDED
+        ));
+        ledger.save(new PartyLedgerEntry(
+                UUID.randomUUID(),
+                businessId,
+                partyId,
+                AccountSide.RECEIVABLE,
+                amountPaise,
+                LedgerReason.LOAN,
+                document.getId(),
+                operationId,
+                occurredAt
+        ));
+        return document.getId();
+    }
+
+    @Transactional
+    public UUID recordSupplierObligation(
+            UUID userId,
+            UUID operationId,
+            UUID partyId,
+            long amountPaise,
+            String cause,
+            LocalDate occurredOn,
+            Instant occurredAt
+    ) {
+        UUID businessId = tenants.currentBusinessId(userId);
+        Optional<UUID> prior = alreadyPosted(businessId, operationId);
+        if (prior.isPresent()) {
+            return prior.get();
+        }
+        requirePositive(amountPaise);
+        requireParty(businessId, partyId, PartyRole.SUPPLIER);
+        requireWhen(occurredOn, occurredAt);
+        operations.saveAndFlush(new PostedOperation(operationId, businessId, "SUPPLIER_OBLIGATION", userId));
+        PostedDocument document = documents.saveAndFlush(new PostedDocument(
+                UUID.randomUUID(),
+                businessId,
+                partyId,
+                DocumentKind.PAYABLE_NOTE,
+                occurredOn,
+                amountPaise,
+                operationId,
+                null,
+                FinanceStatus.RECORDED
+        ));
+        ledger.save(new PartyLedgerEntry(
+                UUID.randomUUID(),
+                businessId,
+                partyId,
+                AccountSide.PAYABLE,
+                amountPaise,
+                LedgerReason.OBLIGATION,
+                document.getId(),
+                operationId,
+                occurredAt
+        ));
+        return document.getId();
+    }
+
+    @Transactional(readOnly = true)
+    public Optional<UUID> soleOpenSale(UUID userId, UUID customerId, long amountPaise) {
+        UUID businessId = tenants.currentBusinessId(userId);
+        List<PostedDocument> open = documents.findByBusinessIdAndPartyIdAndKind(businessId, customerId, DocumentKind.SALE).stream()
+                .filter(sale -> sale.getTotalPaise() != null)
+                .filter(sale -> Paise.subtract(sale.getTotalPaise(), allocations.allocatedTo(sale.getId())) >= amountPaise)
+                .toList();
+        return open.size() == 1 ? Optional.of(open.get(0).getId()) : Optional.empty();
+    }
+
     @Transactional(readOnly = true)
     public long customerReceivablePaise(UUID userId, UUID partyId) {
         return customerReceivablePaiseForBusiness(tenants.currentBusinessId(userId), partyId);

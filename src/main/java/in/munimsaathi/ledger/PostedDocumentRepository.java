@@ -22,6 +22,8 @@ public interface PostedDocumentRepository extends JpaRepository<PostedDocument, 
 
     List<PostedDocument> findByBusinessIdAndOccurredOn(UUID businessId, LocalDate occurredOn);
 
+    List<PostedDocument> findByBusinessIdAndPartyIdAndKind(UUID businessId, UUID partyId, DocumentKind kind);
+
     long countByBusinessIdAndFinanceStatusAndOccurredOnLessThanEqual(
             UUID businessId,
             FinanceStatus financeStatus,

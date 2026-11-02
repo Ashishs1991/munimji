@@ -7,5 +7,7 @@ public enum LedgerReason {
     PURCHASE,
     PAYMENT,
     REFUND,
-    OPENING
+    OPENING,
+    LOAN,
+    OBLIGATION
 }
