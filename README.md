@@ -21,3 +21,7 @@ Keep dated commits and clearly identify work built during the event. The old Tal
 ## Private data
 
 Keep API keys, credentials, raw customer records, and private business documents out of Git. Use redacted or synthetic fixtures. Put secrets in `.env` only. Public repository access is required for submission.
+
+## Demo rehearsal
+
+Read [the demo checklist](doc/DEMO-CHECKLIST.md) before recording. The [recovery feature notes](doc/features/demo-conversation-recovery/AGENTS.md) record the checks and remaining live-integration gates.

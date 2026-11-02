@@ -251,7 +251,7 @@ public class WhatsAppTurn {
             String text = capture.draft() == null
                     ? (capture.answer() == null ? "Namaste. Tell me what was received, sold, or paid." : capture.answer())
                     : reply(new InterpretationOutcome(capture.draft(), List.of(), null, capture.answer()));
-            return remembered(message, text);
+            return remembered(message, capture.transcript(), text);
         }
         if (type.startsWith("image/") || "application/pdf".equals(type)) {
             UUID draftId = message.getDraftId();
@@ -285,7 +285,11 @@ public class WhatsAppTurn {
     }
 
     private Prepared remembered(InboundMessage message, String text) {
-        memory.remember(message.getUserId(), "owner", message.getBody());
+        return remembered(message, message.getBody(), text);
+    }
+
+    private Prepared remembered(InboundMessage message, String ownerText, String text) {
+        memory.remember(message.getUserId(), "owner", ownerText);
         memory.remember(message.getUserId(), "assistant", text);
         return new Prepared(message.getPhone(), text);
     }
@@ -410,6 +414,9 @@ public class WhatsAppTurn {
         List<DraftLine> lines = draftLines.findByDraftIdOrderByLineNumberAsc(draft.getId());
         StringBuilder text = new StringBuilder();
         Party party = draft.getCustomerId() == null ? null : parties.findById(draft.getCustomerId()).orElse(null);
+        if ("PAYMENT".equals(draft.getKind()) || "RECEIVABLE".equals(draft.getKind()) || "PAYABLE".equals(draft.getKind())) {
+            return moneyFacts(draft, party);
+        }
         if (party != null) {
             text.append(party.getDisplayName());
         }
@@ -458,6 +465,29 @@ public class WhatsAppTurn {
             text.append("₹").append(BigDecimal.valueOf(draft.getAmountPaise(), 2).toPlainString());
         }
         return text.toString();
+    }
+
+    private static String moneyFacts(Draft draft, Party party) {
+        String name = party == null ? "party not selected" : party.getDisplayName();
+        String amount = draft.getAmountPaise() == null ? "amount not stated" : "₹" + BigDecimal.valueOf(draft.getAmountPaise(), 2).toPlainString();
+        boolean posted = draft.getStatus() == DraftStatus.POSTED;
+        if ("PAYMENT".equals(draft.getKind())) {
+            String method = draft.getPaymentMethod() == null ? "payment method not stated" : draft.getPaymentMethod();
+            String allocation = draft.getAllocatesDocumentId() == null
+                    ? "Not allocated to an invoice"
+                    : "Allocated to document " + draft.getAllocatesDocumentId();
+            return (posted ? "Money received from " : "Record money received from ") + name + ": " + amount + " via " + method
+                    + ". " + allocation + ". " + (posted ? "Reduced" : "Will reduce") + " their receivable by " + amount
+                    + "; an excess stays as customer credit. Stock " + (posted ? "was" : "will be") + " unchanged";
+        }
+        if ("RECEIVABLE".equals(draft.getKind())) {
+            return (posted ? "New receivable recorded: " : "Record a new receivable: ") + name + " owes you " + amount
+                    + ". This " + (posted ? "increased" : "will increase") + " what they owe by " + amount
+                    + ". Stock " + (posted ? "was" : "will be") + " unchanged";
+        }
+        return (posted ? "Supplier obligation recorded: " : "Record a supplier obligation: ") + "you owe " + name + " " + amount
+                + ". This " + (posted ? "increased" : "will increase") + " your payable by " + amount
+                + ". Stock " + (posted ? "was" : "will be") + " unchanged";
     }
 
     private static void appendPiece(StringBuilder text, String piece) {

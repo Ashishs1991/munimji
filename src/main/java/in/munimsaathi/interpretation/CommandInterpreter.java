@@ -140,6 +140,10 @@ public class CommandInterpreter {
             Instant occurredAt
     ) {
         List<String> refused = refusedTools(reply);
+        String turn = text(reply, "turn");
+        if ("cancel".equals(turn)) {
+            return new InterpretationOutcome(null, refused, null, cancelDraft(userId, draftId, text(reply, "target_draft_id")));
+        }
         UUID ewayDraftId = ewayDraft(userId, reply);
         String intent = firstText(reply, "action", "intent");
         String normalized = intent == null ? "" : intent.toLowerCase(Locale.ROOT);
@@ -187,13 +191,6 @@ public class CommandInterpreter {
                     ? drafts.proposeLines(userId, action, customerId, locationId, specs, occurredOn, occurredAt)
                     : drafts.replaceLines(userId, lineTarget, action, customerId, locationId, specs, occurredOn, occurredAt);
             return new InterpretationOutcome(draft, refused, ewayDraftId, null);
-        }
-        String turn = text(reply, "turn");
-        if ("cancel".equals(turn)) {
-            if (draftId != null) {
-                drafts.cancel(userId, draftId);
-            }
-            return new InterpretationOutcome(null, refused, ewayDraftId, "Cancelled. Nothing was posted.");
         }
         if ("locate".equals(normalized) || "locate_goods".equals(normalized)) {
             return new InterpretationOutcome(null, refused, ewayDraftId, answerFor(userId, "locate", customerId, productId, reply));
@@ -279,6 +276,33 @@ public class CommandInterpreter {
                 ewayDraftId,
                 clarification(userId, text(reply, "party_name"), customerId, supplier, text(reply, "product_name"), productId)
         );
+    }
+
+    private String cancelDraft(UUID userId, UUID draftId, String targetId) {
+        List<DraftBook.OpenDraft> open = drafts.open(userId);
+        UUID selected = draftId;
+        if (targetId != null) {
+            try {
+                selected = UUID.fromString(targetId);
+            } catch (IllegalArgumentException exception) {
+                return "Which draft should I cancel?";
+            }
+        }
+        if (selected == null) {
+            if (open.isEmpty()) {
+                return "There is no open draft to cancel.";
+            }
+            if (open.size() != 1) {
+                return "Which draft should I cancel?";
+            }
+            selected = open.get(0).id();
+        }
+        UUID target = selected;
+        if (open.stream().noneMatch(draft -> target.equals(draft.id()))) {
+            return "That draft is not open in this business. Nothing was canceled.";
+        }
+        drafts.cancel(userId, target);
+        return "Cancelled. Nothing was posted.";
     }
 
     private JsonNode commandJson(String modelText) {

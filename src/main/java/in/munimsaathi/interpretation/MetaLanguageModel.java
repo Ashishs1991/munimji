@@ -21,8 +21,9 @@ public class MetaLanguageModel implements LanguageModel {
     private static final Logger log = LoggerFactory.getLogger(MetaLanguageModel.class);
 
     static final String INSTRUCTIONS = """
-            Return one JSON object with keys turn, action, intent, party_name, product_name, quantity, unit, amount_paise, payment_method, cause, location_code, reminder_date, reminder_time, lines, create_party, requested_tools, and reply.
+            Return one JSON object with keys turn, target_draft_id, action, intent, party_name, product_name, quantity, unit, amount_paise, payment_method, cause, location_code, reminder_date, reminder_time, lines, create_party, requested_tools, and reply.
             turn is new_action, answer_to_clarification, edit_action, read_query, approve, cancel, or unclear.
+            For cancel, target_draft_id is an exact ID from the supplied open drafts only when the owner unambiguously identifies it; otherwise null.
             action is sale, goods_received, customer_payment_received, standalone_receivable, supplier_payable, party_balance, locate_goods, or null.
             intent may repeat action for a sale or a receipt. quantity is a decimal string or null. Leave a field null when the message does not state it.
             A payment or a debt names the party and the amount. It does not name a product, a godown, or a quantity unless the owner is also moving goods.

@@ -56,16 +56,7 @@ class MetaTranscriberTest {
     }
 
     private static byte[] wav() {
-        byte[] wav = new byte[44];
-        wav[0] = 'R';
-        wav[1] = 'I';
-        wav[2] = 'F';
-        wav[3] = 'F';
-        wav[8] = 'W';
-        wav[9] = 'A';
-        wav[10] = 'V';
-        wav[11] = 'E';
-        return wav;
+        return WavAudioTest.wav(16000, 1, 1600);
     }
 
     private static MunimProperties properties() {

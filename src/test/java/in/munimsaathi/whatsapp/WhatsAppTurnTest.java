@@ -394,4 +394,47 @@ class WhatsAppTurnTest {
             throw new IllegalStateException(exception);
         }
     }
+    @Autowired private in.munimsaathi.interpretation.ConversationMemory reviewMemory;
+    @Test void reviewVoiceTranscriptMustBeSavedAsOwnerTurn() {
+        String phone="919800008888"; Shelf sh=shelf(phone);
+        String json="""
+          {"entry":[{"changes":[{"value":{"messages":[{"id":"review-memory-audio","from":"%s","audio":{"id":"review-audio","mime_type":"audio/ogg"}}]}}]}]}
+          """.formatted(phone);
+        byte[] b=json.getBytes(StandardCharsets.UTF_8); ingress.receive(sign(b),b);
+        when(session.download("review-audio")).thenReturn(new byte[]{1,2,3});
+        when(transcriber.transcribe(any(),eq("audio/ogg"))).thenReturn("Agarwal ka balance");
+        when(model.complete("Agarwal ka balance")).thenReturn("{\"action\":\"party_balance\",\"party_name\":\"Agarwal\"}");
+        when(session.sendText(eq(phone),anyString())).thenReturn(new ProviderReceipt("accepted","review-response"));
+        turn.openStored();
+        assertThat(reviewMemory.recent(sh.userId())).contains("Agarwal ka balance");
+    }
+
+    @Test void paymentConfirmationExplainsDirectionAndStockEffect() {
+        String phone="919800007777"; Shelf sh=shelf(phone);
+        byte[] body=message("money-effects",phone,"Agarwal paid 1000 cash"); ingress.receive(sign(body),body);
+        when(model.complete("Agarwal paid 1000 cash")).thenReturn("""
+          {"turn":"new_action","action":"customer_payment_received","party_name":"Agarwal","amount_paise":100000,"payment_method":"Cash"}
+          """);
+        when(session.sendText(eq(phone),anyString())).thenReturn(new ProviderReceipt("accepted","money-effects-reply"));
+        turn.openStored();
+        verify(session).sendText(eq(phone),org.mockito.ArgumentMatchers.contains("Record money received from Agarwal"));
+        verify(session).sendText(eq(phone),org.mockito.ArgumentMatchers.contains("Will reduce their receivable by ₹1000.00"));
+        verify(session).sendText(eq(phone),org.mockito.ArgumentMatchers.contains("Stock will be unchanged"));
+        assertThat(counts.balance(sh.userId(),sh.productId(),sh.godownId())).isEqualByComparingTo("50");
+    }
+    @Test void loanAndPayableConfirmationsSayWhoOwesWhom() {
+        for(boolean payable: new boolean[]{false,true}) {
+            String phone=payable?"919800007778":"919800007779"; Shelf sh=shelf(phone);
+            String name=payable?"Bags Co":"Agarwal";
+            if(payable) parties.create(sh.userId(),name,PartyRole.SUPPLIER);
+            String instruction=payable?"supplier obligation":"new loan";
+            byte[] body=message("direction-"+phone,phone,instruction); ingress.receive(sign(body),body);
+            when(model.complete(instruction)).thenReturn("{\"turn\":\"new_action\",\"action\":\""+(payable?"supplier_payable":"standalone_receivable")+"\",\"party_name\":\""+name+"\",\"amount_paise\":100000,\"cause\":\"new\"}");
+            when(session.sendText(eq(phone),anyString())).thenReturn(new ProviderReceipt("accepted","direction-reply"));
+            turn.openStored();
+            verify(session).sendText(eq(phone),org.mockito.ArgumentMatchers.contains(payable?"you owe Bags Co ₹1000.00":"Agarwal owes you ₹1000.00"));
+            verify(session).sendText(eq(phone),org.mockito.ArgumentMatchers.contains("Stock will be unchanged"));
+        }
+    }
+
 }
