@@ -136,7 +136,7 @@ class WhatsAppTurnTest {
 
         assertThat(messages.findByMessageId("wamid.turn").orElseThrow().getStatus()).isEqualTo(InboundStatus.REPLIED);
         verify(model, times(1)).complete("ek box");
-        verify(session).sendText(PHONE, "I could not make a draft from that. Say the party, product, quantity, unit, and price.");
+        verify(session).sendText(PHONE, "Namaste. Tell me what was received, sold, or paid.");
     }
 
     @Test
@@ -212,7 +212,7 @@ class WhatsAppTurnTest {
         ingress.receive(sign(message("wamid.follow-2", phone, "Godown 1")), message("wamid.follow-2", phone, "Godown 1"));
         turn.openStored();
 
-        verify(session).sendText(eq(phone), org.mockito.ArgumentMatchers.contains("Still need location"));
+        verify(session).sendText(eq(phone), org.mockito.ArgumentMatchers.contains("Still need the godown"));
         verify(session).sendText(eq(phone), org.mockito.ArgumentMatchers.contains("Reply Yes to post this draft only"));
         verify(session, times(2)).sendText(eq(phone), org.mockito.ArgumentMatchers.contains("Agarwal"));
         verify(session, times(2)).sendText(eq(phone), org.mockito.ArgumentMatchers.contains("Office folder"));

@@ -32,6 +32,7 @@ import java.math.BigDecimal;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.time.ZoneId;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
 import java.util.Set;
@@ -276,7 +277,17 @@ public class WhatsAppTurn {
     }
 
     private String reply(InterpretationOutcome outcome) {
-        String text = outcome.answer() != null ? outcome.answer() : details(outcome.draft());
+        String facts = outcome.draft() == null ? null : details(outcome.draft());
+        String text;
+        if (outcome.answer() != null && facts != null) {
+            text = outcome.answer() + " " + facts;
+        } else if (outcome.answer() != null) {
+            text = outcome.answer();
+        } else if (facts != null) {
+            text = facts;
+        } else {
+            text = "Namaste. Tell me what was received, sold, or paid.";
+        }
         if (outcome.ewayDraftId() != null) {
             text = text + " E-way draft " + outcome.ewayDraftId() + " is saved and not submitted.";
         }
@@ -285,18 +296,18 @@ public class WhatsAppTurn {
 
     private String details(DraftProposal draft) {
         if (draft == null) {
-            return "I could not make a draft from that. Say the party, product, quantity, unit, and price.";
+            return "Namaste. Tell me what was received, sold, or paid.";
         }
         return details(null, draft.id());
     }
 
     private String details(UUID userId, UUID draftId) {
         if (draftId == null) {
-            return "I could not make a draft from that. Say the party, product, quantity, unit, and price.";
+            return "Namaste. Tell me what was received, sold, or paid.";
         }
         Draft draft = draftRows.findById(draftId).orElse(null);
         if (draft == null) {
-            return "I could not make a draft from that. Say the party, product, quantity, unit, and price.";
+            return "Namaste. Tell me what was received, sold, or paid.";
         }
         String facts = facts(draft);
         if (draft.getStatus() == DraftStatus.AWAITING_APPROVAL) {
@@ -306,62 +317,117 @@ public class WhatsAppTurn {
         if (draft.getStatus() == DraftStatus.POSTED) {
             return facts + ".";
         }
-        String missing = draft.getMissingFields() == null || draft.getMissingFields().isBlank()
-                ? "a correction"
-                : draft.getMissingFields();
+        String missing = humanMissing(draft.getMissingFields());
+        if (facts.isBlank()) {
+            return "Still need " + missing + ".";
+        }
         return "Still need " + missing + ". So far: " + facts + ".";
+    }
+
+    private static String humanMissing(String raw) {
+        if (raw == null || raw.isBlank()) {
+            return "a correction";
+        }
+        String[] fields = raw.split(",");
+        List<String> words = new ArrayList<>();
+        for (String field : fields) {
+            String word = switch (field.trim()) {
+                case "location" -> "the godown";
+                case "party" -> "the party";
+                case "product" -> "the product";
+                case "quantity" -> "the quantity";
+                case "unit" -> "the unit";
+                case "price" -> "the price";
+                case "action" -> "whether this is a receipt, a sale, or a payment";
+                case "date" -> "the date";
+                default -> field.startsWith("line-") ? "line " + field.substring("line-".length()) : field;
+            };
+            if (!word.isBlank()) {
+                words.add(word);
+            }
+        }
+        if (words.isEmpty()) {
+            return "a correction";
+        }
+        if (words.size() == 1) {
+            return words.get(0);
+        }
+        return String.join(", ", words.subList(0, words.size() - 1)) + " and " + words.get(words.size() - 1);
     }
 
     private String facts(Draft draft) {
         List<DraftLine> lines = draftLines.findByDraftIdOrderByLineNumberAsc(draft.getId());
         StringBuilder text = new StringBuilder();
         Party party = draft.getCustomerId() == null ? null : parties.findById(draft.getCustomerId()).orElse(null);
-        text.append(name(party));
-        text.append(", ");
+        if (party != null) {
+            text.append(party.getDisplayName());
+        }
         if (lines.isEmpty()) {
-            text.append(quantity(draft.getDisplayQuantity(), draft.getUnitLabel()));
-            text.append(" ");
-            text.append(productName(draft.getProductId()));
+            appendPiece(text, knownQuantity(draft.getDisplayQuantity(), draft.getUnitLabel()));
+            appendPiece(text, knownProduct(draft.getProductId()));
         } else {
-            for (int index = 0; index < lines.size(); index++) {
-                DraftLine line = lines.get(index);
-                if (index > 0) {
-                    text.append("; ");
+            for (DraftLine line : lines) {
+                StringBuilder piece = new StringBuilder();
+                String quantity = knownQuantity(line.getDisplayQuantity(), line.getUnitLabel());
+                String product = knownProduct(line.getProductId());
+                if (quantity != null) {
+                    piece.append(quantity);
                 }
-                text.append(quantity(line.getDisplayQuantity(), line.getUnitLabel()));
-                text.append(" ");
-                text.append(productName(line.getProductId()));
+                if (product != null) {
+                    if (!piece.isEmpty()) {
+                        piece.append(' ');
+                    }
+                    piece.append(product);
+                }
+                if (!piece.isEmpty()) {
+                    if (!text.isEmpty()) {
+                        text.append("; ");
+                    }
+                    text.append(piece);
+                }
             }
         }
-        text.append(" at ");
-        text.append(godownName(draft.getLocationId()));
+        String godown = draft.getLocationId() == null ? null : godowns.findById(draft.getLocationId()).map(Godown::getName).orElse(null);
+        if (godown != null) {
+            if (!text.isEmpty()) {
+                text.append(' ');
+            }
+            text.append("at ").append(godown);
+        }
         if (draft.getAmountPaise() != null) {
-            text.append(", ₹").append(BigDecimal.valueOf(draft.getAmountPaise(), 2).toPlainString());
+            if (!text.isEmpty()) {
+                text.append(", ");
+            }
+            text.append("₹").append(BigDecimal.valueOf(draft.getAmountPaise(), 2).toPlainString());
         }
         return text.toString();
     }
 
-    private static String name(Party party) {
-        return party == null ? "party missing" : party.getDisplayName();
+    private static void appendPiece(StringBuilder text, String piece) {
+        if (piece == null) {
+            return;
+        }
+        if (!text.isEmpty()) {
+            text.append(' ');
+        }
+        text.append(piece);
     }
 
-    private String productName(UUID productId) {
+    private String knownProduct(UUID productId) {
         if (productId == null) {
-            return "product missing";
+            return null;
         }
-        return products.findById(productId).map(Product::getName).orElse("product missing");
+        return products.findById(productId).map(Product::getName).orElse(null);
     }
 
-    private String godownName(UUID locationId) {
-        if (locationId == null) {
-            return "godown missing";
+    private static String knownQuantity(BigDecimal quantity, String unit) {
+        if (quantity == null && (unit == null || unit.isBlank())) {
+            return null;
         }
-        return godowns.findById(locationId).map(Godown::getName).orElse("godown missing");
-    }
-
-    private static String quantity(BigDecimal quantity, String unit) {
-        String amount = quantity == null ? "quantity missing" : quantity.stripTrailingZeros().toPlainString();
-        return unit == null || unit.isBlank() ? amount : amount + " " + unit;
+        if (quantity == null) {
+            return unit;
+        }
+        return unit == null || unit.isBlank() ? quantity.stripTrailingZeros().toPlainString() : quantity.stripTrailingZeros().toPlainString() + " " + unit;
     }
 
     private static boolean approval(String body) {

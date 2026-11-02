@@ -55,6 +55,10 @@ public class Party {
         return displayName;
     }
 
+    public String getNormalizedName() {
+        return normalizedName;
+    }
+
     public PartyRole getRole() {
         return role;
     }

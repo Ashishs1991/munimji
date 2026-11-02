@@ -8,4 +8,6 @@ import java.util.UUID;
 public interface PartyRepository extends JpaRepository<Party, UUID> {
 
     List<Party> findByBusinessIdAndNormalizedNameOrderByDisplayNameAsc(UUID businessId, String normalizedName);
+
+    List<Party> findByBusinessIdOrderByDisplayNameAsc(UUID businessId);
 }

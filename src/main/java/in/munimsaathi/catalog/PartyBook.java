@@ -32,6 +32,11 @@ public class PartyBook {
     }
 
     @Transactional(readOnly = true)
+    public List<Party> list(UUID userId) {
+        return parties.findByBusinessIdOrderByDisplayNameAsc(tenants.currentBusinessId(userId));
+    }
+
+    @Transactional(readOnly = true)
     public List<Party> findByName(UUID userId, String displayName) {
         UUID businessId = tenants.currentBusinessId(userId);
         return parties.findByBusinessIdAndNormalizedNameOrderByDisplayNameAsc(

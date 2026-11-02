@@ -161,6 +161,49 @@ class CommandInterpreterTest {
     }
 
     @Test
+    void aGreetingWithNoFactsAsksWhatToRecord() {
+        Shop shop = shop();
+        when(model.complete("Hi")).thenReturn("""
+                {"intent":null,"requested_tools":[]}
+                """);
+
+        InterpretationOutcome outcome = interpreter.interpret(shop.userId(), "Hi", DAY, AT);
+
+        assertThat(outcome.draft()).isNull();
+        assertThat(outcome.answer()).isEqualTo("Namaste. Tell me what was received, sold, or paid.");
+    }
+
+    @Test
+    void aGreetingLeavesTheOpenDraftUntouched() {
+        Shop shop = shop();
+        var open = drafts.propose(
+                shop.userId(), "receive", null, null, null, new BigDecimal("2"), "box", null, DAY, AT
+        );
+        when(model.complete("Hi")).thenReturn("""
+                {"intent":null,"requested_tools":[]}
+                """);
+
+        InterpretationOutcome outcome = interpreter.interpret(shop.userId(), "Hi", open.id(), DAY, AT);
+
+        assertThat(outcome.draft()).isNull();
+        assertThat(outcome.answer()).isEqualTo("Namaste. Tell me what was received, sold, or paid.");
+    }
+
+    @Test
+    void aClosePartyNameIsNamedAndNotAttached() {
+        Shop shop = shop();
+        when(model.complete("Aggarwal 2 box received")).thenReturn("""
+                {"intent":"receive","party_name":"Aggarwal","quantity":"2","unit":"box","requested_tools":[]}
+                """);
+
+        InterpretationOutcome outcome = interpreter.interpret(shop.userId(), "Aggarwal 2 box received", DAY, AT);
+
+        assertThat(outcome.draft()).isNotNull();
+        assertThat(outcome.draft().missingFields()).contains("party");
+        assertThat(outcome.answer()).contains("Aggarwal").contains("Agarwal");
+    }
+
+    @Test
     void aFencedSaleReplyStillBecomesADraft() {
         Shop shop = shop();
         when(model.complete("sold 2 piece office folder to Agarwal")).thenReturn("```json\n" + saleJson().trim() + "\n```");

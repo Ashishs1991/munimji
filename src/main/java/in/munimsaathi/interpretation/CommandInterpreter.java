@@ -3,6 +3,7 @@ package in.munimsaathi.interpretation;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import in.munimsaathi.catalog.CatalogService;
+import in.munimsaathi.catalog.Names;
 import in.munimsaathi.catalog.Party;
 import in.munimsaathi.catalog.PartyBook;
 import in.munimsaathi.catalog.PartyRole;
@@ -159,14 +160,19 @@ public class CommandInterpreter {
         if (answer != null) {
             return new InterpretationOutcome(null, refused, ewayDraftId, answer);
         }
-        if (draftId == null && action == null && customerId == null && productId == null && locationId == null
+        if (action == null && customerId == null && productId == null && locationId == null
                 && quantity == null && unit == null && amount == null) {
-            return new InterpretationOutcome(null, refused, ewayDraftId, null);
+            return new InterpretationOutcome(null, refused, ewayDraftId, spoken(reply));
         }
         DraftProposal draft = draftId == null
                 ? drafts.propose(userId, action, customerId, productId, locationId, quantity, unit, amount, occurredOn, occurredAt)
                 : drafts.continueDraft(userId, draftId, action, customerId, productId, locationId, quantity, unit, amount, occurredOn, occurredAt);
-        return new InterpretationOutcome(draft, refused, ewayDraftId, null);
+        return new InterpretationOutcome(
+                draft,
+                refused,
+                ewayDraftId,
+                clarification(userId, text(reply, "party_name"), customerId, supplier, text(reply, "product_name"), productId)
+        );
     }
 
     private JsonNode commandJson(String modelText) {
@@ -407,6 +413,74 @@ public class CommandInterpreter {
             return null;
         }
         return value.intValue();
+    }
+
+    private static String spoken(JsonNode reply) {
+        String replyText = text(reply, "reply");
+        return replyText == null ? "Namaste. Tell me what was received, sold, or paid." : replyText;
+    }
+
+    private String clarification(
+            UUID userId,
+            String partyName,
+            UUID partyId,
+            boolean supplier,
+            String productName,
+            UUID productId
+    ) {
+        StringBuilder note = new StringBuilder();
+        if (partyName != null && partyId == null) {
+            note.append(partyNote(userId, partyName, supplier)).append(' ');
+        }
+        if (productName != null && productId == null) {
+            note.append("I heard ").append(productName).append(", and no saved product has that name.");
+        }
+        return note.isEmpty() ? null : note.toString().trim();
+    }
+
+    private String partyNote(UUID userId, String partyName, boolean supplier) {
+        List<Party> named = parties.findByName(userId, partyName);
+        if (named.size() == 1) {
+            Party party = named.get(0);
+            String role = party.getRole() == PartyRole.CUSTOMER ? "a customer" : "a supplier";
+            String needed = supplier ? "A receipt needs a supplier." : "A sale needs a customer.";
+            return party.getDisplayName() + " is saved as " + role + ". " + needed;
+        }
+        if (named.size() > 1) {
+            return "I heard " + partyName + ", and more than one saved party has that name.";
+        }
+        Party close = closeParty(userId, partyName);
+        if (close != null) {
+            return "I heard " + partyName + ". The saved party is " + close.getDisplayName() + ". Say that name if it is the same party.";
+        }
+        return "I heard " + partyName + ", and no saved party has that name.";
+    }
+
+    private Party closeParty(UUID userId, String partyName) {
+        String wanted = Names.normalize(partyName);
+        List<Party> close = parties.list(userId).stream()
+                .filter(party -> distance(wanted, party.getNormalizedName()) == 1)
+                .toList();
+        return close.size() == 1 ? close.get(0) : null;
+    }
+
+    private static int distance(String left, String right) {
+        int[] previous = new int[right.length() + 1];
+        int[] current = new int[right.length() + 1];
+        for (int column = 0; column <= right.length(); column++) {
+            previous[column] = column;
+        }
+        for (int row = 1; row <= left.length(); row++) {
+            current[0] = row;
+            for (int column = 1; column <= right.length(); column++) {
+                int cost = left.charAt(row - 1) == right.charAt(column - 1) ? 0 : 1;
+                current[column] = Math.min(Math.min(current[column - 1] + 1, previous[column] + 1), previous[column - 1] + cost);
+            }
+            int[] swap = previous;
+            previous = current;
+            current = swap;
+        }
+        return previous[right.length()];
     }
 
     private UUID party(UUID userId, String name, boolean supplier) {

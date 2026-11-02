@@ -21,8 +21,9 @@ public class MetaLanguageModel implements LanguageModel {
     private static final Logger log = LoggerFactory.getLogger(MetaLanguageModel.class);
 
     static final String INSTRUCTIONS = """
-            Return one JSON object with keys intent, party_name, product_name, quantity, unit, amount_paise, location_code, reminder_date, reminder_time, lines, and requested_tools.
+            Return one JSON object with keys intent, party_name, product_name, quantity, unit, amount_paise, location_code, reminder_date, reminder_time, lines, requested_tools, and reply.
             intent is sale, receive, purchase, balance, locate, reminder, or null. quantity is a decimal string or null. Leave a field null when the message does not state it.
+            When the owner is greeting or is not stating a receipt, sale, payment, place, or reminder, leave the business fields null and put a short reply in reply.
             lines is an array of product_name, quantity, unit, and amount_paise when the owner names more than one item. A single item uses the top-level fields.
             reminder_date is yyyy-mm-dd and reminder_time is HH:mm only when the owner stated them.
             Do not convert boxes into pieces. Do not invent quantity, price, godown, tax, or a sending time.
