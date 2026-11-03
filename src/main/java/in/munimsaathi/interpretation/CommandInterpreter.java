@@ -471,7 +471,12 @@ public class CommandInterpreter {
         boolean storage = words.matches(".*(?:rakha|rakhe|pada|रखा|रखे|पड़ा|पड़ा).*")
                 && words.matches(".*(?:godown|godam|गोदाम|गोडाउन).*");
         boolean arrival = words.matches(".*(?:^| )(?:liya|kharida|aaya|received|purchase|bought|लिया|खरीदा|आया|आए)(?: |$).*");
-        boolean query = words.matches(".*(?:^| )(?:kahan|kahaan|कहाँ|कहां|where)(?: |$).*");
+        String requestedIntent = firstText(fields, "action", "intent");
+        boolean query = "read_query".equals(text(fields, "turn")) || "locate_goods".equals(requestedIntent) || "locate".equals(requestedIntent)
+                || words.matches(".*(?:^| )(?:kahan|kahaan|कहाँ|कहां|where|kaun|kon|kaunse|konse|कौन|कौनसे|किस|किसमें|which)(?: |$).*");
+        if (query && storage && !arrival) {
+            fields.put("action", "locate_goods"); fields.put("turn", "read_query"); fields.remove("target_draft_id");
+        }
         if (storage && !arrival && !query && !"answer_to_clarification".equals(text(fields, "turn"))
                 && !source.split("(?iu)godown|godam|गोदाम|गोडाउन", 2)[0].isBlank()) {
             String label = text(fields, "location_label");
@@ -590,6 +595,9 @@ public class CommandInterpreter {
         if (("locate_goods".equals(normalized) || "locate".equals(normalized)) && text(reply, "location_label") != null) {
             var places = locations.locateLabel(userId, text(reply, "location_label"));
             if (places.isEmpty()) {
+                if (text(reply, "party_name") != null && text(reply, "product_name") == null) {
+                    return new InterpretationOutcome(null, refused, ewayDraftId, partyGoodsAnswer(userId, text(reply, "party_name")));
+                }
                 UUID knownProduct = product(userId, firstText(reply, "product_name", "location_label"));
                 if (knownProduct != null) {
                     var stockPlaces = locations.locate(userId, knownProduct);
@@ -604,6 +612,10 @@ public class CommandInterpreter {
                     : places.stream().map(place -> godowns.findById(place.locationId()).map(Godown::getName).orElse("Unknown godown"))
                     .collect(java.util.stream.Collectors.joining(", ")) + " mein last note kiya tha. Stock ki quantity is note se confirm nahi hoti.";
             return new InterpretationOutcome(null, refused, ewayDraftId, answer);
+        }
+        if (("locate_goods".equals(normalized) || "locate".equals(normalized))
+                && text(reply, "party_name") != null && text(reply, "product_name") == null) {
+            return new InterpretationOutcome(null, refused, ewayDraftId, partyGoodsAnswer(userId, text(reply, "party_name")));
         }
         boolean balanceQuery = "party_balance".equals(normalized) || "balance".equals(normalized)
                 || "confirm_existing_debt".equals(normalized);
@@ -991,6 +1003,28 @@ public class CommandInterpreter {
             }
         }
         return null;
+    }
+
+    private String partyGoodsAnswer(UUID userId, String name) {
+        var named = parties.findByName(userId, name);
+        if (named.isEmpty()) return "“" + name + "” naam ki saved party nahi mili. Poora saved naam bataiye.";
+        if (named.size() != 1) return "Is naam ki ek se zyada parties hain. Sahi party select karke dobara poochhiye.";
+        var goods = locations.partyGoods(userId, named.get(0).getId());
+        if (goods.isEmpty()) return name + " ki koi posted goods receipt nahi mili. Pending draft ko available stock nahi maanunga.";
+        StringBuilder answer = new StringBuilder(name + " se receive hue products ka total recorded current stock:");
+        for (var item : goods) {
+            answer.append("\n").append(item.productName()).append(": ");
+            if (item.currentStock().isEmpty()) {
+                answer.append("abhi positive stock record nahi hai. Purchase records mein jagah: ")
+                        .append(item.receiptLocations().stream().map(id -> godowns.findById(id).map(Godown::getName).orElse("unknown godown"))
+                                .collect(java.util.stream.Collectors.joining(", "))).append(".");
+            } else {
+                answer.append(item.currentStock().stream().map(place -> godowns.findById(place.locationId()).map(Godown::getName).orElse("unknown godown")
+                                + " — " + place.available().stripTrailingZeros().toPlainString() + " " + item.baseUnit())
+                        .collect(java.util.stream.Collectors.joining("; "))).append(".");
+            }
+        }
+        return answer.toString();
     }
 
     private String answerFor(UUID userId, String intent, UUID partyId, UUID productId, JsonNode reply) {

@@ -39,6 +39,7 @@ public class LocationBook {
     private final StockPosting stock;
     private final StockBalanceRepository balances;
     private final StockMovementRepository movements;
+    private final in.munimsaathi.ledger.DocumentLineRepository receiptLines;
 
     public LocationBook(
             TenantContext tenants,
@@ -49,7 +50,8 @@ public class LocationBook {
             LocationFactRepository facts,
             StockPosting stock,
             StockBalanceRepository balances,
-            StockMovementRepository movements
+            StockMovementRepository movements,
+            in.munimsaathi.ledger.DocumentLineRepository receiptLines
     ) {
         this.tenants = tenants;
         this.catalog = catalog;
@@ -60,6 +62,7 @@ public class LocationBook {
         this.stock = stock;
         this.balances = balances;
         this.movements = movements;
+        this.receiptLines = receiptLines;
     }
 
     @Transactional
@@ -208,6 +211,30 @@ public class LocationBook {
         return facts.findFirstByBusinessIdAndProductIdOrderByNotedAtDesc(businessId, productId)
                 .map(fact -> List.of(new Place(fact.getLocationId(), BigDecimal.ZERO, false)))
                 .orElseGet(List::of);
+    }
+
+    public record PartyGoods(String productName, String baseUnit, List<Place> currentStock, List<UUID> receiptLocations) {}
+
+    @Transactional(readOnly = true)
+    public List<PartyGoods> partyGoods(UUID userId, UUID partyId) {
+        UUID businessId = tenants.currentBusinessId(userId);
+        var grouped = new java.util.LinkedHashMap<UUID, java.util.Set<UUID>>();
+        for (var line : receiptLines.receivedFromParty(businessId, partyId)) {
+            grouped.computeIfAbsent(line.getProductId(), ignored -> new java.util.LinkedHashSet<>()).add(line.getLocationId());
+        }
+        List<PartyGoods> results = new ArrayList<>();
+        for (var entry : grouped.entrySet()) {
+            Product product = requireProduct(businessId, entry.getKey());
+            var byLocation = new java.util.LinkedHashMap<UUID, BigDecimal>();
+            for (var balance : balances.findByBusinessIdAndProductIdAndOwnership(businessId, product.getId(), Ownership.BUSINESS)) {
+                byLocation.merge(balance.getLocationId(), balance.getQuantity(), BigDecimal::add);
+            }
+            List<Place> current = byLocation.entrySet().stream().filter(row -> row.getValue().signum() > 0)
+                    .map(row -> new Place(row.getKey(), row.getValue(), true)).toList();
+            results.add(new PartyGoods(product.getName(), product.getBaseUnit(), current, List.copyOf(entry.getValue())));
+        }
+        results.sort(Comparator.comparing(PartyGoods::productName));
+        return results;
     }
 
     @Transactional(readOnly = true)

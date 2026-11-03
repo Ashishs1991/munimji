@@ -105,6 +105,57 @@ class DemoRecoveryTest {
     @Autowired private DialogueState dialogueState;
     @Autowired private org.springframework.jdbc.core.JdbcTemplate jdbc;
 
+    @Autowired private in.munimsaathi.location.LocationBook goodsLocations;
+
+    @Test
+    void supplierLocationFollowsTransferredStockAndDoesNotLeakAnotherBusiness() {
+        Shop sh = shop();
+        UUID supplier = parties.create(sh.userId(), "Nirmal Traders", PartyRole.SUPPLIER).getId();
+        var seven = godowns.save(new Godown(UUID.randomUUID(), sh.businessId(), "g7", "Godown 7"));
+        var eight = godowns.save(new Godown(UUID.randomUUID(), sh.businessId(), "g8", "Godown 8"));
+        posting.receiveGoods(sh.userId(), UUID.randomUUID(), supplier, sh.productId(), seven.getId(), BigDecimal.TEN, "box", DAY, AT);
+        goodsLocations.transfer(sh.userId(), UUID.randomUUID(), sh.productId(), seven.getId(), eight.getId(), BigDecimal.TEN, "box", AT.plusSeconds(1));
+        when(model.complete("Nirmal ka maal kahan hai")).thenReturn("""
+                {"turn":"read_query","action":"locate_goods","party_name":"Nirmal Traders"}
+                """);
+        var answer = interpreter.interpret(sh.userId(), "Nirmal ka maal kahan hai", DAY, AT);
+        assertThat(answer.answer()).contains("Godown 8", "100 piece").doesNotContain("Godown 7");
+        Shop other = shop();
+        assertThat(goodsLocations.partyGoods(other.userId(), supplier)).isEmpty();
+    }
+
+    @Test
+    void hindiSupplierLocationQuestionReadsPostedGoodsWithoutCreatingANote() {
+        Shop sh = shop();
+        UUID supplier = parties.create(sh.userId(), "निर्मल ट्रेडर्स", PartyRole.SUPPLIER).getId();
+        var seven = godowns.save(new Godown(UUID.randomUUID(), sh.businessId(), "g7", "Godown 7"));
+        posting.receiveGoods(sh.userId(), UUID.randomUUID(), supplier, sh.productId(), seven.getId(), new BigDecimal("10"), "box", DAY, AT);
+        var pending = drafts.propose(sh.userId(), "receive", supplier, sh.productId(), sh.godownId(), new BigDecimal("99"), "box", null, DAY, AT);
+        String query = "निर्मल ट्रेडर्स का माल कौन से गोदाम में पड़ा है??";
+        when(model.complete(query)).thenReturn("""
+                {"turn":"read_query","action":"locate_goods","party_name":"निर्मल ट्रेडर्स","product_name":null,"reply":"Godown 1 mein pending draft hai"}
+                """);
+        var answer = interpreter.interpret(sh.userId(), query, DAY, AT);
+        assertThat(answer.draft()).isNull();
+        assertThat(answer.answer()).contains("Godown 7", "Office folder").doesNotContain("Godown 1");
+        assertThat(drafts.open(sh.userId())).hasSize(1);
+        assertThat(drafts.inspect(sh.userId(), pending.id()).getStatus()).isEqualTo(DraftStatus.AWAITING_APPROVAL);
+    }
+
+    @Test
+    void pendingSupplierReceiptIsNotReportedAsPostedStock() {
+        Shop sh = shop();
+        UUID supplier = parties.create(sh.userId(), "Nirmal Traders", PartyRole.SUPPLIER).getId();
+        drafts.propose(sh.userId(), "receive", supplier, sh.productId(), sh.godownId(), BigDecimal.TEN, "box", null, DAY, AT);
+        when(model.complete("Nirmal ka maal konse godown mai pada hai")).thenReturn("""
+                {"turn":"read_query","action":"locate_goods","party_name":"Nirmal Traders","location_label":"Nirmal Traders ka maal"}
+                """);
+        var answer = interpreter.interpret(sh.userId(), "Nirmal ka maal konse godown mai pada hai", DAY, AT);
+        assertThat(answer.draft()).isNull();
+        assertThat(answer.answer()).contains("posted").doesNotContain("stock hai");
+        assertThat(drafts.open(sh.userId())).hasSize(1);
+    }
+
     @Test
     void unknownGodownCanBeCreatedAndBareNumberDoesNotChangeQuantity() {
         Shop sh = shop();

@@ -60,6 +60,8 @@ public interface StockBalanceRepository extends JpaRepository<StockBalance, UUID
             UUID batchId
     );
 
+    List<StockBalance> findByBusinessIdAndProductIdAndOwnership(UUID businessId, UUID productId, Ownership ownership);
+
     List<StockBalance> findByBusinessIdAndProductIdAndOwnershipAndBatchIdIsNull(
             UUID businessId,
             UUID productId,
