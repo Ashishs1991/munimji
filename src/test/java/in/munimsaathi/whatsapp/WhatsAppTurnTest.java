@@ -126,6 +126,31 @@ class WhatsAppTurnTest {
     @Autowired private org.springframework.transaction.support.TransactionTemplate inboxTransactions;
 
     @Test
+    void failedVoiceDownloadKeepsThePendingPartyQuestionAndTextCanContinueIt() {
+        String phone = "919800005569";
+        Shelf sh = shelf(phone);
+        when(session.sendText(eq(phone), anyString())).thenReturn(new ProviderReceipt("accepted", "voice-download-fallback"));
+        when(model.complete("new Nirmal purchase")).thenReturn("""
+                {"turn":"new_action","action":"goods_received","party_name":"Nirmal Traders","product_name":"Carry Bags 12x16","quantity":"10","unit":"box","location_code":"Godown 7"}
+                """);
+        byte[] initial = message("nirmal-download-start", phone, "new Nirmal purchase"); ingress.receive(sign(initial), initial); turn.openStored();
+        UUID id = messages.findByMessageId("nirmal-download-start").orElseThrow().getDraftId();
+        byte[] audio = ("{\"entry\":[{\"changes\":[{\"value\":{\"messages\":[{\"id\":\"nirmal-voice-download-fail\",\"from\":\"" + phone + "\",\"audio\":{\"id\":\"failed-short-voice\",\"mime_type\":\"audio/ogg\"}}]}}]}]}").getBytes(StandardCharsets.UTF_8);
+        when(session.download("failed-short-voice")).thenReturn(null);
+        ingress.receive(sign(audio), audio); turn.openStored();
+        verify(session).sendText(eq(phone), org.mockito.ArgumentMatchers.contains("jawab text mein bhejiye"));
+        byte[] text = message("nirmal-text-continue", phone, "Haan bana do"); ingress.receive(sign(text), text); turn.openStored();
+        assertThat(messages.findByMessageId("nirmal-text-continue").orElseThrow().getDraftId()).isEqualTo(id);
+        Draft draft = draftRows.findById(id).orElseThrow();
+        assertThat(draft.getCustomerId()).isNotNull();
+        assertThat(draft.getDisplayQuantity()).isEqualByComparingTo("10");
+        assertThat(draft.getHeardLocation()).isEqualTo("Godown 7");
+        assertThat(parties.findByName(sh.userId(), "Nirmal Traders")).hasSize(1);
+        assertThat(counts.balance(sh.userId(), sh.productId(), sh.godownId())).isEqualByComparingTo("50");
+        verify(transcriber, never()).transcribe(any(), anyString());
+    }
+
+    @Test
     void photoReplyCannotAttachToAnotherBusinessEntry() {
         String phone = "919800005567";
         Shelf current = shelf(phone);

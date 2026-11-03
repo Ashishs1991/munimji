@@ -344,7 +344,9 @@ public class WhatsAppTurn {
         String type = message.getMediaType() == null ? "" : message.getMediaType().toLowerCase(Locale.ROOT).split(";", 2)[0].trim();
         byte[] bytes = session.download(message.getMediaId());
         if (bytes == null || bytes.length == 0) {
-            return new Prepared(message.getPhone(), "The file could not be downloaded.");
+            return new Prepared(message.getPhone(), type.startsWith("audio/")
+                    ? "Voice note download nahi hui. Isi draft ko continue karne ke liye jawab text mein bhejiye, ya voice note dobara bhejiye. Pichli draft details safe hain."
+                    : "The file could not be downloaded.");
         }
         LocalDate day = LocalDate.now(ZONE);
         Instant now = Instant.now();
