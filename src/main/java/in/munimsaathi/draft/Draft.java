@@ -117,6 +117,18 @@ public class Draft {
     public String getLocationLabel() { return locationLabel; }
     public void rememberLocationLabel(String label) { locationLabel = label; }
 
+    @Column(name = "document_fields")
+    private String documentFields;
+    @Column(name = "document_date")
+    private LocalDate documentDate;
+
+    public String getDocumentFields() { return documentFields; }
+    public LocalDate getDocumentDate() { return documentDate; }
+    public void rememberDocument(String fields, LocalDate date) {
+        documentFields = fields;
+        if (date != null) documentDate = date;
+    }
+
     protected Draft() {
     }
 

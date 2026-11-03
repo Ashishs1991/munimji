@@ -24,4 +24,4 @@ Docker must be running.
 
 ## Still open
 
-The bytes live in PostgreSQL. The Supabase storage bucket is not used yet. A photo does not start a draft by itself when none is open.
+The bytes live in PostgreSQL. The Supabase storage bucket is not used yet. WhatsApp photos now start an independent draft by default; replying to a specific entry can attach evidence to that open draft. See [photo draft isolation](../photo-draft-isolation/AGENTS.md).

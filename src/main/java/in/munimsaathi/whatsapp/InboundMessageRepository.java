@@ -56,5 +56,23 @@ public interface InboundMessageRepository extends JpaRepository<InboundMessage, 
     Optional<InboundMessage> latestReply(@Param("businessId") UUID businessId,
                                        @Param("userId") UUID userId, @Param("phone") String phone);
 
+    @Query(value = """
+            select * from inbound_messages where business_id = :businessId and user_id = :userId and phone = :phone
+              and (message_id = :reference or outbound_message_id = :reference) and draft_id is not null
+            """, nativeQuery = true)
+    List<InboundMessage> findReferenced(@Param("businessId") UUID businessId, @Param("userId") UUID userId,
+                                       @Param("phone") String phone, @Param("reference") String reference);
+
+    @Modifying
+    @Query(value = """
+            update inbound_messages set processing_token = :token, processing_until = :until
+            where id = :id and status = 'STORED' and (processing_until is null or processing_until < now())
+            """, nativeQuery = true)
+    int claim(@Param("id") UUID id, @Param("token") UUID token, @Param("until") java.time.Instant until);
+
+    @Modifying
+    @Query(value = "update inbound_messages set processing_token = null, processing_until = null where id = :id and processing_token = :token", nativeQuery = true)
+    int release(@Param("id") UUID id, @Param("token") UUID token);
+
     long countByMessageId(String messageId);
 }

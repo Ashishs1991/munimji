@@ -117,37 +117,71 @@ public class WhatsAppTurn {
     public synchronized void openStored() {
         for (InboundMessage message : messages.findByStatus(InboundStatus.STORED)) {
             UUID id = message.getId();
-            Prepared prepared;
+            UUID token = UUID.randomUUID();
+            // shortcut: renew the lease if model processing can exceed ten minutes.
+            if (!Boolean.TRUE.equals(transactions.execute(status -> messages.claim(id, token, Instant.now().plusSeconds(600)) == 1))) continue;
             try {
-                transactions.executeWithoutResult(status -> bindApproval(id));
-                prepared = transactions.execute(status -> {
-                    Prepared reply = prepare(id);
-                    InboundMessage inbound = messages.findById(id).orElse(null);
-                    if (reply != null && inbound != null && inbound.getUserId() != null && !inbound.isHistorySaved()) remembered(inbound, reply.text());
-                    rememberShownProposal(id, reply);
-                    if (reply != null && inbound != null) inbound.rememberReply(reply.text());
-                    return reply;
-                });
-            } catch (RuntimeException exception) {
-                String phone = messages.findById(id).map(InboundMessage::getPhone).orElse(null);
-                String text = exception.getMessage() == null ? "That message could not be read." : exception.getMessage();
-                prepared = new Prepared(phone, text);
+                Prepared prepared;
+                try {
+                    transactions.executeWithoutResult(status -> { bindApproval(id); bindDocumentDraft(id); });
+                    prepared = transactions.execute(status -> {
+                        Prepared reply = prepare(id);
+                        InboundMessage inbound = messages.findById(id).orElse(null);
+                        if (reply != null && inbound != null && inbound.getUserId() != null && !inbound.isHistorySaved()) remembered(inbound, reply.text());
+                        rememberShownProposal(id, reply);
+                        if (reply != null && inbound != null) inbound.rememberReply(reply.text());
+                        return reply;
+                    });
+                } catch (RuntimeException exception) {
+                    String phone = messages.findById(id).map(InboundMessage::getPhone).orElse(null);
+                    String text = exception.getMessage() == null ? "That message could not be read." : exception.getMessage();
+                    prepared = new Prepared(phone, text);
+                }
+                if (prepared == null || prepared.text() == null || prepared.phone() == null) {
+                    continue;
+                }
+                ProviderReceipt receipt;
+                try {
+                    receipt = session.sendText(prepared.phone(), prepared.text());
+                } catch (RuntimeException exception) {
+                    receipt = new ProviderReceipt("outcome_unknown", null);
+                }
+                if (receipt == null) {
+                    receipt = new ProviderReceipt("outcome_unknown", null);
+                }
+                String attempt = receipt.status();
+                String providerId = receipt.providerId();
+                transactions.executeWithoutResult(status -> record(id, attempt, providerId));
+            } finally {
+                transactions.executeWithoutResult(status -> messages.release(id, token));
             }
-            if (prepared == null || prepared.text() == null || prepared.phone() == null) {
-                continue;
-            }
-            ProviderReceipt receipt;
-            try {
-                receipt = session.sendText(prepared.phone(), prepared.text());
-            } catch (RuntimeException exception) {
-                receipt = new ProviderReceipt("outcome_unknown", null);
-            }
-            if (receipt == null) {
-                receipt = new ProviderReceipt("outcome_unknown", null);
-            }
-            String attempt = receipt.status();
-            transactions.executeWithoutResult(status -> record(id, attempt));
         }
+    }
+
+    private void bindDocumentDraft(UUID id) {
+        InboundMessage message = messages.findById(id).orElse(null);
+        if (message == null || message.getUserId() == null || message.getStatus() != InboundStatus.STORED
+                || message.getDraftId() != null || message.getReplyText() != null || message.getMediaId() == null) return;
+        String type = message.getMediaType() == null ? "" : message.getMediaType().toLowerCase(Locale.ROOT);
+        if (!type.startsWith("image/") && !type.startsWith("application/pdf")) return;
+        tenants.inBusiness(message.getUserId(), message.getBusinessId(), () -> {
+            UUID draftId;
+            if (message.getReplyToMessageId() != null) {
+                var parents = messages.findReferenced(message.getBusinessId(), message.getUserId(), message.getPhone(), message.getReplyToMessageId());
+                if (parents.size() != 1) throw new IllegalArgumentException("Is photo ki reply wali entry nahi mili. Nayi entry ke liye photo normal bhejiye.");
+                draftId = parents.get(0).getDraftId();
+                UUID target = draftId;
+                if (openDrafts(message.getUserId()).stream().noneMatch(row -> row.getId().equals(target))) {
+                    throw new IllegalArgumentException("Photo ki reply wali entry ab pending nahi hai. Nayi entry ke liye photo normal bhejiye.");
+                }
+            } else {
+                draftId = drafts.propose(message.getUserId(), null, null, null, null, null, null, null, LocalDate.now(ZONE), Instant.now()).id();
+                drafts.rememberDocument(message.getUserId(), draftId, "{}", null);
+            }
+            message.attachDraft(draftId);
+            interpreter.focus(message.getUserId(), draftId);
+            return null;
+        });
     }
 
     private void rememberShownProposal(UUID id, Prepared reply) {
@@ -239,11 +273,11 @@ public class WhatsAppTurn {
         if (message.isApprovalBound()) {
             return remembered(message, approveBound(message).text());
         }
-        if (message.getDraftId() != null) {
-            return new Prepared(message.getPhone(), details(message.getUserId(), message.getDraftId()));
-        }
         if (message.getMediaId() != null) {
             return fromMedia(message);
+        }
+        if (message.getDraftId() != null) {
+            return new Prepared(message.getPhone(), details(message.getUserId(), message.getDraftId()));
         }
         if (message.getBody() == null || message.getBody().isBlank()) {
             return new Prepared(message.getPhone(), "Send the instruction as text.");
@@ -333,17 +367,7 @@ public class WhatsAppTurn {
         }
         if (type.startsWith("image/") || "application/pdf".equals(type)) {
             UUID draftId = message.getDraftId();
-            if (draftId == null) {
-                List<Draft> open = openDrafts(message.getUserId());
-                if (open.size() == 1) {
-                    draftId = open.get(0).getId();
-                } else if (open.isEmpty()) {
-                    draftId = drafts.propose(message.getUserId(), null, null, null, null, null, null, null, day, now).id();
-                } else {
-                    return new Prepared(message.getPhone(), "Say which draft this file belongs to.");
-                }
-                message.attachDraft(draftId);
-            }
+            if (draftId == null) throw new IllegalArgumentException("Photo ka alag draft nahi bana. Photo dobara bhejiye.");
             var stored = documents.attach(message.getUserId(), draftId, type, "whatsapp", bytes);
             InterpretationOutcome outcome = documents.extract(message.getUserId(), stored.id(), day, now);
             if (outcome.draft() != null) {
@@ -354,10 +378,11 @@ public class WhatsAppTurn {
         return new Prepared(message.getPhone(), "Send a photo, PDF, or voice note.");
     }
 
-    private void record(UUID id, String attempt) {
+    private void record(UUID id, String attempt, String providerId) {
         messages.findById(id).ifPresent(message -> {
             if (message.getStatus() == InboundStatus.STORED) {
                 message.recordAttempt(attempt);
+                if ("accepted".equals(attempt)) message.rememberOutbound(providerId);
             }
         });
     }
@@ -497,6 +522,7 @@ public class WhatsAppTurn {
             return "Namaste. Tell me what was received, sold, or paid.";
         }
         String facts = facts(draft);
+        if (draft.getDocumentDate() != null) facts += ". Photo ki date: " + draft.getDocumentDate() + "; entry ki date: " + draft.getOccurredOn();
         if (draft.getStatus() == DraftStatus.AWAITING_APPROVAL) {
             draft.present();
             return "Reply Yes to post this draft only: " + facts + ".";

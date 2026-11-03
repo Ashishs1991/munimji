@@ -110,7 +110,10 @@ public class WhatsAppIngress {
         if (sender == null) {
             return store(null, null, messageId, phone, body, mediaId, mediaType, InboundStatus.REJECTED, 403);
         }
-        return store(sender.getBusinessId(), sender.getUserId(), messageId, phone, body, mediaId, mediaType, InboundStatus.STORED, 200);
+        WebhookResult result = store(sender.getBusinessId(), sender.getUserId(), messageId, phone, body, mediaId, mediaType, InboundStatus.STORED, 200);
+        String reference = text(message.path("context"), "id");
+        if (reference != null && result.id() != null) messages.findById(result.id()).orElseThrow().rememberReplyTo(reference);
+        return result;
     }
 
     private WebhookResult store(

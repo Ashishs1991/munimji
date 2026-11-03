@@ -123,6 +123,87 @@ class WhatsAppTurnTest {
 
     @Autowired private in.munimsaathi.location.LocationBook locationNotes;
 
+    @Autowired private org.springframework.transaction.support.TransactionTemplate inboxTransactions;
+
+    @Test
+    void photoReplyCannotAttachToAnotherBusinessEntry() {
+        String phone = "919800005567";
+        Shelf current = shelf(phone);
+        Shelf other = shelf("919800005568");
+        var foreign = drafts.propose(other.userId(), "sale", other.customerId(), other.productId(), other.godownId(), BigDecimal.ONE, "box", 100000L, LocalDate.now(), Instant.now());
+        var parent = new InboundMessage(UUID.randomUUID(), other.businessId(), other.userId(), "foreign-photo-parent", phone, "preview", InboundStatus.REPLIED);
+        parent.attachDraft(foreign.id()); messages.saveAndFlush(parent);
+        byte[] photo = ("{\"entry\":[{\"changes\":[{\"value\":{\"messages\":[{\"id\":\"foreign-photo-reply\",\"from\":\"" + phone + "\",\"context\":{\"id\":\"foreign-photo-parent\"},\"image\":{\"id\":\"foreign-image\",\"mime_type\":\"image/jpeg\"}}]}}]}]}").getBytes(StandardCharsets.UTF_8);
+        when(session.sendText(eq(phone), anyString())).thenReturn(new ProviderReceipt("accepted", "foreign-reply-error"));
+        ingress.receive(sign(photo), photo); turn.openStored();
+        assertThat(messages.findByMessageId("foreign-photo-reply").orElseThrow().getDraftId()).isNull();
+        assertThat(draftRows.findById(foreign.id()).orElseThrow().getVersion()).isEqualTo(foreign.version());
+        verify(session, never()).download("foreign-image");
+        verify(model, never()).completeDocument(anyString(), anyString(), anyString(), any());
+    }
+
+    @Test
+    void messageClaimsExcludeAnotherWorkerAndCannotBeReleasedByItsToken() {
+        String phone = "919800005565";
+        shelf(phone);
+        byte[] body = message("claim-photo-message", phone, "hello"); ingress.receive(sign(body), body);
+        UUID id = messages.findByMessageId("claim-photo-message").orElseThrow().getId();
+        UUID first = UUID.randomUUID(), second = UUID.randomUUID();
+        assertThat(inboxTransactions.<Integer>execute(status -> messages.claim(id, first, Instant.now().plusSeconds(600)))).isEqualTo(1);
+        assertThat(inboxTransactions.<Integer>execute(status -> messages.claim(id, second, Instant.now().plusSeconds(600)))).isZero();
+        assertThat(inboxTransactions.<Integer>execute(status -> messages.release(id, second))).isZero();
+        assertThat(inboxTransactions.<Integer>execute(status -> messages.release(id, first))).isEqualTo(1);
+        messages.deleteById(id);
+    }
+
+    @Test
+    void replyingWithAnImageCanExplicitlyAttachToTheShownEntry() {
+        String phone = "919800005566";
+        Shelf sh = shelf(phone);
+        var draft = drafts.propose(sh.userId(), "sale", sh.customerId(), sh.productId(), sh.godownId(), BigDecimal.ONE, "box", 100000L, LocalDate.now(), Instant.now());
+        when(session.sendText(eq(phone), anyString())).thenReturn(new ProviderReceipt("accepted", "explicit-photo-parent"));
+        byte[] preview = message("explicit-photo-preview", phone, "entry " + draft.id()); ingress.receive(sign(preview), preview); turn.openStored();
+        byte[] photo = ("{\"entry\":[{\"changes\":[{\"value\":{\"messages\":[{\"id\":\"explicit-photo\",\"from\":\"" + phone + "\",\"context\":{\"id\":\"explicit-photo-parent\"},\"image\":{\"id\":\"explicit-image\",\"mime_type\":\"image/jpeg\"}}]}}]}]}").getBytes(StandardCharsets.UTF_8);
+        when(session.download("explicit-image")).thenReturn(new byte[]{1,2,3});
+        when(model.completeDocument(anyString(), eq("image/jpeg"), anyString(), any())).thenReturn("""
+                {"party_name":"Agarwal","product_name":"Office folder","quantity":"1","unit":"box","amount_paise":100000,"location_code":"g1"}
+                """);
+        ingress.receive(sign(photo), photo); turn.openStored();
+        assertThat(messages.findByMessageId("explicit-photo").orElseThrow().getDraftId()).isEqualTo(draft.id());
+        assertThat(draftRows.findById(draft.id()).orElseThrow().getStatus()).isEqualTo(DraftStatus.AWAITING_APPROVAL);
+        assertThat(counts.balance(sh.userId(), sh.productId(), sh.godownId())).isEqualByComparingTo("50");
+    }
+
+    @Test
+    void photoAndPurchaseAnswerStaySeparateFromAnOlderReceipt() {
+        String phone = "919800005564";
+        Shelf sh = shelf(phone);
+        UUID oldSupplier = parties.create(sh.userId(), "Sharma Traders", PartyRole.SUPPLIER).getId();
+        var old = drafts.propose(sh.userId(), "receive", oldSupplier, sh.productId(), sh.godownId(), new BigDecimal("10"), "box", null, LocalDate.now(), Instant.now());
+        byte[] original = ("{\"entry\":[{\"changes\":[{\"value\":{\"messages\":[{\"id\":\"independent-photo\",\"from\":\"" + phone + "\",\"image\":{\"id\":\"pp-photo\",\"mime_type\":\"image/jpeg\"}}]}}]}]}").getBytes(StandardCharsets.UTF_8);
+        when(session.download("pp-photo")).thenReturn(new byte[]{1,2,3});
+        when(model.completeDocument(anyString(), eq("image/jpeg"), anyString(), any())).thenReturn("""
+                {"action":null,"party_name":"PP Traders","product_name":"Bags 10x12","quantity":"10","unit":"Box","location_code":"Godown 3","document_date":"2026-10-10"}
+                """);
+        when(session.sendText(eq(phone), anyString())).thenReturn(new ProviderReceipt("accepted", "pp-photo-reply"));
+        ingress.receive(sign(original), original); turn.openStored();
+        UUID photoDraft = messages.findByMessageId("independent-photo").orElseThrow().getDraftId();
+        assertThat(photoDraft).isNotEqualTo(old.id());
+        Draft extracted = draftRows.findById(photoDraft).orElseThrow();
+        assertThat(extracted.getHeardParty()).isEqualTo("PP Traders");
+        assertThat(extracted.getHeardProduct()).isEqualTo("Bags 10x12");
+        assertThat(extracted.getHeardLocation()).isEqualTo("Godown 3");
+        assertThat(extracted.getDisplayQuantity()).isEqualByComparingTo("10");
+        byte[] purchase = message("photo-purchase-answer", phone, "Kharida ha");
+        ingress.receive(sign(purchase), purchase); turn.openStored();
+        assertThat(messages.findByMessageId("photo-purchase-answer").orElseThrow().getDraftId()).isEqualTo(photoDraft);
+        assertThat(draftRows.findById(photoDraft).orElseThrow().getKind()).isEqualTo("RECEIPT");
+        assertThat(draftRows.findById(photoDraft).orElseThrow().getHeardParty()).isEqualTo("PP Traders");
+        assertThat(draftRows.findById(old.id()).orElseThrow().getCustomerId()).isEqualTo(oldSupplier);
+        assertThat(draftRows.findById(old.id()).orElseThrow().getVersion()).isEqualTo(old.version());
+        verify(model, never()).complete(anyString());
+    }
+
     @Test
     void retryingAProductCreationReplyDoesNotReinterpretYesOrPostStock() {
         String phone = "919800005563";

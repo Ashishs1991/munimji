@@ -135,12 +135,72 @@ public class CommandInterpreter {
             Instant occurredAt
     ) {
         JsonNode reply = commandJson(modelJson);
-        if (reply == null) {
-            return new InterpretationOutcome(null, List.of(), null, modelJson == null ? "" : modelJson.trim());
+        if (!hasExtractionFields(modelJson)) throw new IllegalArgumentException("Photo ke fields save nahi hue. Photo dobara bhejiye; purani entry use nahi hui.");
+        var raw = (com.fasterxml.jackson.databind.node.ObjectNode) reply.deepCopy();
+        preserveDocumentVariant(raw);
+        if (raw.path("lines").isArray()) {
+            for (JsonNode line : raw.path("lines")) if (line.isObject()) preserveDocumentVariant((com.fasterxml.jackson.databind.node.ObjectNode) line);
         }
-        var extracted = (com.fasterxml.jackson.databind.node.ObjectNode) singleLine(reply).deepCopy();
+        var extracted = (com.fasterxml.jackson.databind.node.ObjectNode) singleLine(raw).deepCopy();
         extracted.remove(List.of("create_party", "create_product"));
-        return finish(userId, rememberHeard(userId, extracted, apply(userId, draftId, extracted, occurredOn, occurredAt)));
+        extracted.put("turn", "answer_to_clarification");
+        extracted.put("target_draft_id", draftId.toString());
+        String kind = drafts.kindOf(userId, draftId);
+        String action = kind == null ? null : switch (kind) {
+            case "SALE" -> "sale";
+            case "RECEIPT" -> "goods_received";
+            case "LOCATION" -> "remember_location";
+            default -> null;
+        };
+        extracted.put("action", action); extracted.putNull("intent");
+        var facts = mapper.createObjectNode();
+        for (String key : List.of("party_name", "product_name", "quantity", "unit", "amount_paise", "location_code", "document_date", "lines")) {
+            if (extracted.hasNonNull(key)) facts.set(key, extracted.get(key));
+        }
+        var outcome = rememberHeard(userId, extracted, apply(userId, draftId, extracted, occurredOn, occurredAt));
+        if (outcome.draft() == null || !draftId.equals(outcome.draft().id())) throw new IllegalArgumentException("Photo ka draft save nahi hua. Entry approve na karein; photo dobara bhejiye.");
+        drafts.rememberDocument(userId, draftId, facts.toString(), localDate(text(extracted, "document_date")));
+        return traced(userId, "[document extraction]", modelJson, finish(userId, outcome));
+    }
+
+    private void preserveDocumentVariant(com.fasterxml.jackson.databind.node.ObjectNode fields) {
+        String variant = firstText(fields, "product_variant", "variant", "size");
+        String product = text(fields, "product_name");
+        if (product != null && variant != null && !product.toLowerCase(Locale.ROOT).contains(variant.toLowerCase(Locale.ROOT))) fields.put("product_name", product + " " + variant);
+    }
+
+    public String extractDocument(UUID userId, UUID draftId, String instruction, String mediaType, String fileName, byte[] content) {
+        drafts.inspect(userId, draftId);
+        String previous = TurnContext.current();
+        try {
+            TurnContext.set("DOCUMENT_EXTRACTION_MODE. Extract only this file's facts. Ignore previous transactions. Target draft: " + draftId);
+            String reply = model.completeDocument(instruction, mediaType, fileName, content);
+            if (!hasExtractionFields(reply)) {
+                reply = model.completeDocument(instruction + " Your previous response had no saved structured facts. Return only factual JSON, not a conversational question.", mediaType, fileName, content);
+            }
+            return reply;
+        } finally {
+            if (previous == null) TurnContext.clear(); else TurnContext.set(previous);
+        }
+    }
+
+    public boolean hasExtractionFields(String response) {
+        try {
+            JsonNode node = commandJson(response);
+            if (node == null) return false;
+            for (String key : List.of("party_name", "product_name", "quantity", "unit", "amount_paise", "location_code")) {
+                if (node.hasNonNull(key)) return true;
+            }
+            return node.path("lines").isArray() && !node.path("lines").isEmpty();
+        } catch (RuntimeException invalid) { return false; }
+    }
+
+    private com.fasterxml.jackson.databind.node.ObjectNode documentFacts(in.munimsaathi.draft.Draft draft) {
+        if (draft.getDocumentFields() != null) {
+            try { return (com.fasterxml.jackson.databind.node.ObjectNode) mapper.readTree(draft.getDocumentFields()); }
+            catch (Exception invalid) { throw new IllegalStateException("Photo ke saved fields nahi padhe ja sake. Entry post nahi hui.", invalid); }
+        }
+        return mapper.createObjectNode();
     }
 
     private JsonNode singleLine(JsonNode reply) {
@@ -202,8 +262,17 @@ public class CommandInterpreter {
         dialogue.save(userId, draft.getId(), null, null, null);
         if (draft.getStatus() != in.munimsaathi.draft.DraftStatus.NEEDS_CLARIFICATION) return outcome;
         if ("LOCATION".equals(draft.getKind())) return offerGodown(userId, outcome);
-        if (draft.getKind() == null && (draft.getDisplayQuantity() != null || draft.getHeardProduct() != null)) {
+        if (draft.getKind() == null && (draft.getDisplayQuantity() != null || draft.getHeardProduct() != null
+                || documentFacts(draft).path("lines").isArray())) {
             dialogue.save(userId, draft.getId(), "STOCK_ACTION", null, null);
+            if (draft.getDocumentFields() != null) {
+                String summary = "Photo ka alag draft: " + (draft.getHeardParty() == null ? "" : draft.getHeardParty() + ", ")
+                        + (draft.getHeardProduct() == null ? "" : draft.getHeardProduct() + ", ")
+                        + (draft.getDisplayQuantity() == null ? "" : draft.getDisplayQuantity().stripTrailingZeros().toPlainString() + " " + draft.getUnitLabel() + ", ")
+                        + (draft.getHeardLocation() == null ? "" : draft.getHeardLocation())
+                        + (draft.getDocumentDate() == null ? "" : ". Photo ki date: " + draft.getDocumentDate());
+                return withAnswer(outcome, summary + ". Yeh maal kharida/aaya hai, bika hai, ya sirf jagah note karni hai? Abhi stock ya paise nahi badle.");
+            }
             return withAnswer(outcome, "Quantity aur maal ki baat samajh gaya. Kya naya maal aaya hai, bika hai, ya sirf uski jagah note karni hai? Stock abhi nahi badla.");
         }
         if (draft.getCustomerId() == null && draft.getHeardParty() != null) {
@@ -278,6 +347,11 @@ public class CommandInterpreter {
         DraftProposal proposal = new DraftProposal(current.getId(), current.getVersion(), current.getContentHash(), current.getStatus(),
                 current.getMissingFields().isBlank() ? List.of() : List.of(current.getMissingFields().split(",")), current.getAmountPaise());
         InterpretationOutcome same = new InterpretationOutcome(proposal, List.of(), null, null);
+        if (current.getDocumentFields() != null && documentFacts(current).isEmpty()
+                && (isApproval(source) || words.matches("[0-9०-९]+")
+                || Set.of("kharida ha", "kharida hai", "kharida", "खरीदा है", "maal aaya").contains(words))) {
+            return withAnswer(same, "Is photo ke fields abhi save nahi hue. Photo dobara bhejiye; pichli transaction se details nahi lunga.");
+        }
         if (current.getMissingFields().contains("location")) {
             String answer = words.replaceFirst(" (?:mai|mein|me|में|मे)$", "");
             boolean bareNumber = answer.matches("[0-9०-९]+") && (current.getMissingFields().equals("location")
@@ -324,14 +398,17 @@ public class CommandInterpreter {
         }
         if ("STOCK_ACTION".equals(state.question())) {
             String action = switch (words) {
-                case "maal aaya", "naya maal aaya", "received", "purchase", "माल आया", "नया माल आया", "माल आया है" -> "goods_received";
+                case "maal aaya", "naya maal aaya", "received", "purchase", "माल आया", "नया माल आया", "माल आया है",
+                        "kharida ha", "kharida hai", "kharida", "maine kharida hai", "खरीदा", "खरीदा है", "मैंने खरीदा है" -> "goods_received";
                 case "maal bika", "sale", "bika", "माल बिका", "बिक्री हुई" -> "sale";
                 case "sirf jagah", "location", "sirf location", "सिर्फ जगह", "जगह नोट करनी है" -> "remember_location";
                 default -> null;
             };
             if (action != null) {
-                var fields = mapper.createObjectNode();
+                var fields = documentFacts(current);
                 fields.put("turn", "answer_to_clarification"); fields.put("target_draft_id", focused.toString()); fields.put("action", action);
+                if (current.getDisplayQuantity() != null) fields.put("quantity", current.getDisplayQuantity().toPlainString());
+                if (current.getUnitLabel() != null) fields.put("unit", current.getUnitLabel());
                 if (current.getHeardParty() != null) fields.put("party_name", current.getHeardParty());
                 if (current.getHeardProduct() != null) fields.put("product_name", current.getHeardProduct());
                 if (current.getHeardLocation() != null) fields.put("location_code", current.getHeardLocation());

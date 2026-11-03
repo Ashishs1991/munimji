@@ -471,6 +471,13 @@ public class DraftBook {
     }
 
     @Transactional
+    public void rememberDocument(UUID userId, UUID draftId, String fields, LocalDate date) {
+        Draft draft = requireDraft(tenants.currentBusinessId(userId), draftId);
+        if (draft.getStatus() == DraftStatus.POSTED) throw new IllegalArgumentException("Posted entry badal nahi sakte.");
+        draft.rememberDocument(fields, date);
+    }
+
+    @Transactional
     public void forgetResolved(UUID userId, UUID draftId, boolean party, boolean product, boolean location) {
         Draft draft = requireDraft(tenants.currentBusinessId(userId), draftId);
         if (draft.getStatus() == DraftStatus.POSTED) throw new IllegalArgumentException("Posted entry badal nahi sakte.");

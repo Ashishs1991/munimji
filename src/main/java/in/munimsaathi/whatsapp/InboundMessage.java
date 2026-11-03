@@ -92,6 +92,15 @@ public class InboundMessage {
     public void markHistorySaved() { historySaved = true; }
     public void useTranscript(String transcript) { body = transcript; }
 
+    @Column(name = "reply_to_message_id")
+    private String replyToMessageId;
+    @Column(name = "outbound_message_id")
+    private String outboundMessageId;
+
+    public String getReplyToMessageId() { return replyToMessageId; }
+    public void rememberReplyTo(String id) { if (replyToMessageId == null) replyToMessageId = id; }
+    public void rememberOutbound(String id) { if (id != null) outboundMessageId = id; }
+
     protected InboundMessage() {
     }
 

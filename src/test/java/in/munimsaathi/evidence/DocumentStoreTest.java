@@ -83,6 +83,44 @@ class DocumentStoreTest {
     private PostedDocumentRepository posted;
 
     @Test
+    void proseOnlyVisionIsRepairedIntoSavedFactsBeforeAskingForTheAction() {
+        Shop shop = shop();
+        var draft = drafts.propose(shop.userId(), null, null, null, null, null, null, null, DAY, AT);
+        var file = documents.attach(shop.userId(), draft.id(), "image/jpeg", "photo.jpg", new byte[]{1,2,3});
+        when(model.completeDocument(org.mockito.ArgumentMatchers.anyString(), eq("image/jpeg"), eq("photo.jpg"), any()))
+                .thenReturn("Photo mein PP Traders, Bags 10x12, 10 Box, Godown 3 likha hai. Kharida ya sirf rakha hai?")
+                .thenReturn("""
+                        {"action":null,"party_name":"PP Traders","lines":[{"product_name":"Bags","product_variant":"10x12","quantity":"10","unit":"Box"}],"location_code":"Godown 3","document_date":"2026-10-10"}
+                        """);
+        var result = documents.extract(shop.userId(), file.id(), DAY, AT);
+        var row = drafts.inspect(shop.userId(), result.draft().id());
+        assertThat(row.getHeardParty()).isEqualTo("PP Traders");
+        assertThat(row.getHeardProduct()).isEqualTo("Bags 10x12");
+        assertThat(row.getDocumentDate()).isEqualTo(LocalDate.of(2026,10,10));
+        assertThat(row.getDocumentFields()).contains("PP Traders", "Bags 10x12", "Godown 3");
+        assertThat(row.getKind()).isNull();
+        assertThat(result.answer()).contains("PP Traders", "Bags 10x12", "Godown 3", "2026-10-10", "kharida");
+        verify(model, org.mockito.Mockito.times(2)).completeDocument(org.mockito.ArgumentMatchers.anyString(), eq("image/jpeg"), eq("photo.jpg"), any());
+    }
+
+    @Test
+    void extractedTargetCannotRedirectThePhotoToAnotherOpenTransaction() {
+        Shop shop = shop();
+        var older = incomplete(shop);
+        var fresh = drafts.propose(shop.userId(), null, null, null, null, null, null, null, DAY, AT);
+        var file = documents.attach(shop.userId(), fresh.id(), "image/jpeg", "new.jpg", new byte[]{1,2,3});
+        when(model.completeDocument(org.mockito.ArgumentMatchers.anyString(), eq("image/jpeg"), eq("new.jpg"), any())).thenReturn("""
+                {"turn":"edit_action","target_draft_id":"%s","action":"sale","party_name":"PP Traders","product_name":"Bags 10x12","quantity":"10","unit":"Box","location_code":"g1","create_party":true,"create_product":true}
+                """.formatted(older.id()));
+        var result = documents.extract(shop.userId(), file.id(), DAY, AT);
+        assertThat(result.draft().id()).isEqualTo(fresh.id());
+        assertThat(drafts.inspect(shop.userId(), older.id()).getVersion()).isEqualTo(older.version());
+        assertThat(parties.findByName(shop.userId(), "PP Traders")).isEmpty();
+        assertThat(catalog.candidates(shop.userId(), "Bags 10x12")).isEmpty();
+        assertThat(posted.findByOperationId(older.id())).isEmpty();
+    }
+
+    @Test
     void aPhotoAttachesToTheOnlyOpenDraftAndKeepsItsBytes() {
         Shop shop = shop();
         DraftProposal draft = incomplete(shop);
