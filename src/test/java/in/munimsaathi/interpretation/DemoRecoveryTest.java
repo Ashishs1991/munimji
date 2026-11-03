@@ -106,6 +106,46 @@ class DemoRecoveryTest {
     @Autowired private org.springframework.jdbc.core.JdbcTemplate jdbc;
 
     @Test
+    void unknownGodownCanBeCreatedAndBareNumberDoesNotChangeQuantity() {
+        Shop sh = shop();
+        parties.create(sh.userId(), "Supplier", PartyRole.SUPPLIER);
+        when(model.complete("ten boxes arrived")).thenReturn("""
+                {"turn":"new_action","action":"goods_received","party_name":"Supplier","product_name":"Office folder","quantity":"10","unit":"box"}
+                """);
+        var receipt = interpreter.interpret(sh.userId(), "ten boxes arrived", DAY, AT);
+        var location = interpreter.interpret(sh.userId(), "Godown 3 mai", DAY, AT);
+        assertThat(location.draft().id()).isEqualTo(receipt.draft().id());
+        assertThat(location.answer()).contains("Godown 3", "naya godown", "Haan");
+        assertThat(interpreter.interpret(sh.userId(), "3", DAY, AT).answer()).contains("Godown 3", "naya godown");
+        assertThat(godowns.findByBusinessIdOrderByCodeAsc(sh.businessId())).hasSize(1);
+        var yes = interpreter.interpret(sh.userId(), "Haan", DAY, AT);
+        assertThat(yes.draft().status()).isEqualTo(DraftStatus.AWAITING_APPROVAL);
+        var row = drafts.inspect(sh.userId(), receipt.draft().id());
+        assertThat(row.getDisplayQuantity()).isEqualByComparingTo("10");
+        assertThat(godowns.findByBusinessIdOrderByCodeAsc(sh.businessId())).hasSize(2);
+        assertThat(counts.balance(sh.userId(), sh.productId(), row.getLocationId())).isEqualByComparingTo("0");
+        drafts.approve(sh.userId(), row.getId(), yes.draft().version(), yes.draft().contentHash());
+        assertThat(counts.balance(sh.userId(), sh.productId(), row.getLocationId())).isEqualByComparingTo("100");
+    }
+
+    @Test
+    void misplacedGodownLabelIsRetainedAndCanBeDeclined() {
+        Shop sh = shop();
+        parties.create(sh.userId(), "Supplier", PartyRole.SUPPLIER);
+        when(model.complete("raw godown label")).thenReturn("""
+                {"turn":"new_action","action":"goods_received","party_name":"Supplier","product_name":"Office folder","quantity":"10","unit":"box","location_code":null,"location_label":"Godown 3"}
+                """);
+        var receipt = interpreter.interpret(sh.userId(), "raw godown label", DAY, AT);
+        assertThat(receipt.answer()).contains("Godown 3", "naya godown");
+        assertThat(drafts.inspect(sh.userId(), receipt.draft().id()).getHeardLocation()).isEqualTo("Godown 3");
+        assertThat(interpreter.interpret(sh.userId(), "Nahi", DAY, AT).answer()).contains("godown");
+        var existing = interpreter.interpret(sh.userId(), "1", DAY, AT);
+        assertThat(existing.draft().status()).isEqualTo(DraftStatus.AWAITING_APPROVAL);
+        assertThat(drafts.inspect(sh.userId(), receipt.draft().id()).getLocationId()).isEqualTo(sh.godownId());
+        assertThat(godowns.findByBusinessIdOrderByCodeAsc(sh.businessId())).hasSize(1);
+    }
+
+    @Test
     void aProductLocationQueryCanFindStockWithoutALabelNote() {
         Shop sh = shop();
         openBoxes(sh, "5");

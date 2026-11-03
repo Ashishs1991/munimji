@@ -144,6 +144,11 @@ public class CommandInterpreter {
     }
 
     private JsonNode singleLine(JsonNode reply) {
+        var normalized = (com.fasterxml.jackson.databind.node.ObjectNode) reply.deepCopy();
+        if (!normalized.hasNonNull("location_code") && godownNumber(text(normalized, "location_label")) != null) {
+            normalized.put("location_code", text(normalized, "location_label"));
+        }
+        reply = normalized;
         JsonNode lines = reply.get("lines");
         if (lines == null || !lines.isArray() || lines.size() != 1) return reply;
         var fields = (com.fasterxml.jackson.databind.node.ObjectNode) reply.deepCopy();
@@ -195,7 +200,8 @@ public class CommandInterpreter {
         if (outcome.draft() == null) return outcome;
         var draft = drafts.inspect(userId, outcome.draft().id());
         dialogue.save(userId, draft.getId(), null, null, null);
-        if (draft.getStatus() != in.munimsaathi.draft.DraftStatus.NEEDS_CLARIFICATION || "LOCATION".equals(draft.getKind())) return outcome;
+        if (draft.getStatus() != in.munimsaathi.draft.DraftStatus.NEEDS_CLARIFICATION) return outcome;
+        if ("LOCATION".equals(draft.getKind())) return offerGodown(userId, outcome);
         if (draft.getKind() == null && (draft.getDisplayQuantity() != null || draft.getHeardProduct() != null)) {
             dialogue.save(userId, draft.getId(), "STOCK_ACTION", null, null);
             return withAnswer(outcome, "Quantity aur maal ki baat samajh gaya. Kya naya maal aaya hai, bika hai, ya sirf uski jagah note karni hai? Stock abhi nahi badla.");
@@ -224,6 +230,18 @@ public class CommandInterpreter {
             dialogue.save(userId, draft.getId(), kind, draft.getHeardProduct(), draft.getUnitLabel());
             return withAnswer(outcome, questionForDraft(userId, draft.getId(), kind, draft.getHeardProduct(), draft.getUnitLabel()));
         }
+        return offerGodown(userId, outcome);
+    }
+
+    private InterpretationOutcome offerGodown(UUID userId, InterpretationOutcome outcome) {
+        var draft = drafts.inspect(userId, outcome.draft().id());
+        if (draft.getLocationId() == null && draft.getHeardLocation() != null
+                && ("RECEIPT".equals(draft.getKind()) || "SALE".equals(draft.getKind()) || "LOCATION".equals(draft.getKind()))) {
+            String number = godownNumber(draft.getHeardLocation());
+            String name = number == null ? draft.getHeardLocation() : "Godown " + number;
+            dialogue.save(userId, draft.getId(), "CREATE_GODOWN", name, null);
+            return withAnswer(outcome, questionForDraft(userId, draft.getId(), "CREATE_GODOWN", name, null));
+        }
         return outcome;
     }
 
@@ -244,6 +262,7 @@ public class CommandInterpreter {
     }
 
     private String creationQuestion(String question, String name, String unit) {
+        if ("CREATE_GODOWN".equals(question)) return "“" + name + "” samajh gaya, lekin yeh registered nahi hai. Kya is naam ka naya godown banaun? Haan bolein, ya kisi existing godown ka naam/number batayein. Stock abhi nahi badlega.";
         if ("USE_PARTY".equals(question)) return "“" + name + "” saved hai, lekin is entry ke liye " + unit + " role chahiye. Kya inhe " + unit + " bhi maan kar wahi party use karun? Haan ya doosri party ka naam batayein. Paise abhi nahi badlenge.";
         if ("CREATE_PARTY".equals(question)) return "“" + name + "” saved parties mein nahi hai. Kya is naam ki nayi party banaun? Haan bolein, ya purani party ka saved naam batayein. Baaki entry yaad hai.";
         if ("PRODUCT_UNIT".equals(question)) return "“" + name + "” naya product banana ho to stock kis base unit mein ginein—bori, kg ya pieces?";
@@ -259,6 +278,18 @@ public class CommandInterpreter {
         DraftProposal proposal = new DraftProposal(current.getId(), current.getVersion(), current.getContentHash(), current.getStatus(),
                 current.getMissingFields().isBlank() ? List.of() : List.of(current.getMissingFields().split(",")), current.getAmountPaise());
         InterpretationOutcome same = new InterpretationOutcome(proposal, List.of(), null, null);
+        if (current.getMissingFields().contains("location")) {
+            String answer = words.replaceFirst(" (?:mai|mein|me|में|मे)$", "");
+            boolean bareNumber = answer.matches("[0-9०-९]+") && (current.getMissingFields().equals("location")
+                    || "CREATE_GODOWN".equals(state.question()) || "GODOWN_NAME".equals(state.question()));
+            String requested = bareNumber ? "Godown " + answer : answer;
+            if (godownNumber(requested) != null) {
+                var fields = mapper.createObjectNode();
+                fields.put("turn", "answer_to_clarification"); fields.put("target_draft_id", focused.toString());
+                fields.put("location_code", "Godown " + godownNumber(requested));
+                return finish(userId, rememberHeard(userId, fields, apply(userId, focused, fields, day, at)));
+            }
+        }
         if (state.question() == null) {
             if (isApproval(source) && current.getStatus() == in.munimsaathi.draft.DraftStatus.NEEDS_CLARIFICATION) {
                 return withAnswer(same, "Is draft mein abhi " + current.getMissingFields() + " clear karna hai. Pehle yeh detail bataiye; entry post nahi hui.");
@@ -271,6 +302,12 @@ public class CommandInterpreter {
         }
         boolean hasYes = words.matches(".*(?:^| )(?:haan|han|ha|yes|हाँ|हां)(?: |$).*");
         boolean hasNo = words.matches(".*(?:^| )(?:nahi|nahin|no|नहीं|नही)(?: |$).*");
+        boolean godownQuestion = "CREATE_GODOWN".equals(state.question()) || "GODOWN_NAME".equals(state.question());
+        if (godownQuestion && hasYes && hasNo) return withAnswer(same, "Naya godown banana hai? Haan ya existing godown ka naam/number batayein.");
+        if (godownQuestion && Set.of("no", "nahi", "nahin", "नहीं", "नही").contains(words)) {
+            dialogue.save(userId, focused, "GODOWN_NAME", state.name(), null);
+            return withAnswer(same, "Naya godown nahi banaunga. Existing godown ka naam ya number bataiye; baaki entry yaad hai.");
+        }
         if (hasYes && hasNo) {
             return withAnswer(same, "CREATE_PARTY".equals(state.question())
                     ? "Kya nayi party banani hai ya purani party hai? ‘Haan, nayi party banao’ ya ‘Nahi, purani party hai’ bataiye. Entry abhi post nahi hui."
@@ -320,13 +357,23 @@ public class CommandInterpreter {
                     "haan naya product hai " + name, "हाँ नया प्रोडक्ट है " + name).contains(words);
         }
         if (!yes) return null;
-        if (!"CREATE_PARTY".equals(state.question()) && !"CREATE_PRODUCT".equals(state.question()) && !"MATCH_PARTY".equals(state.question()) && !"USE_PARTY".equals(state.question())) {
+        if (!"CREATE_PARTY".equals(state.question()) && !"CREATE_PRODUCT".equals(state.question()) && !"MATCH_PARTY".equals(state.question()) && !"USE_PARTY".equals(state.question()) && !"CREATE_GODOWN".equals(state.question())) {
             return withAnswer(same, "Pehle " + ("PRODUCT_UNIT".equals(state.question()) ? "base unit" : "saved naam") + " bataiye; Haan se yeh detail nahi milti.");
         }
         var fields = mapper.createObjectNode();
         fields.put("turn", "answer_to_clarification");
         fields.put("target_draft_id", focused.toString());
-        if ("CREATE_PARTY".equals(state.question()) || "MATCH_PARTY".equals(state.question()) || "USE_PARTY".equals(state.question())) {
+        if ("CREATE_GODOWN".equals(state.question())) {
+            if (location(userId, state.name()) == null) {
+                String number = godownNumber(state.name());
+                String code = number == null ? "wa-" + UUID.randomUUID() : "g" + number;
+                boolean conflict = godowns.findByBusinessIdOrderByCodeAsc(tenants.currentBusinessId(userId)).stream()
+                        .anyMatch(place -> place.getCode().equalsIgnoreCase(code));
+                if (conflict) return withAnswer(same, "Is godown code par ambiguity hai. Existing godown ka exact code bataiye.");
+                godowns.saveAndFlush(new Godown(UUID.randomUUID(), tenants.currentBusinessId(userId), code, state.name()));
+            }
+            fields.put("location_code", state.name());
+        } else if ("CREATE_PARTY".equals(state.question()) || "MATCH_PARTY".equals(state.question()) || "USE_PARTY".equals(state.question())) {
             if ("USE_PARTY".equals(state.question())) {
                 var named = parties.findByName(userId, state.name());
                 if (named.size() != 1) return withAnswer(same, "Party ab ambiguous hai. Poora saved naam batayein.");
@@ -602,7 +649,7 @@ public class CommandInterpreter {
         boolean stated = action != null || customerId != null || productId != null || locationId != null
                 || quantity != null || unit != null || amount != null || method != null || purpose != null
                 || Boolean.TRUE.equals(flag(reply, "create_party")) || Boolean.TRUE.equals(flag(reply, "create_product"))
-                || ("answer_to_clarification".equals(turn) && (text(reply, "party_name") != null || text(reply, "product_name") != null));
+                || ("answer_to_clarification".equals(turn) && (text(reply, "party_name") != null || text(reply, "product_name") != null || text(reply, "location_code") != null));
         if (!stated) {
             return new InterpretationOutcome(null, refused, ewayDraftId, spoken(reply));
         }
